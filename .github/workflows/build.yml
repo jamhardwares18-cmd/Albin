@@ -1,0 +1,428 @@
+name: Build YT Downloader APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
+
+      - name: Generate Android App Source
+        run: |
+          mkdir -p app/src/main/java/com/example/ytdownloader
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "YTDownloader"
+          include(":app")
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.example.ytdownloader'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.example.ytdownloader"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+
+                  ndk {
+                      abiFilters 'arm64-v8a', 'armeabi-v7a'
+                  }
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.13.1'
+              implementation 'androidx.appcompat:appcompat:1.7.0'
+              implementation 'io.github.junkfood02.youtubedl-android:library:0.18.1'
+              implementation 'io.github.junkfood02.youtubedl-android:ffmpeg:0.17.2'
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="YT Downloader"
+                  android:extractNativeLibs="true"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.SEND" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <data android:mimeType="text/plain" />
+                      </intent-filter>
+                  </activity>
+
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/ytdownloader/MainActivity.kt
+          package com.example.ytdownloader
+
+          import android.Manifest
+          import android.content.ContentValues
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.Environment
+          import android.provider.MediaStore
+          import android.view.ViewGroup
+          import android.widget.*
+          import androidx.appcompat.app.AppCompatActivity
+          import com.yausername.ffmpeg.FFmpeg
+          import com.yausername.youtubedl_android.YoutubeDL
+          import com.yausername.youtubedl_android.YoutubeDLRequest
+          import java.io.File
+          import java.io.FileInputStream
+          import java.io.FileOutputStream
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var urlInput: EditText
+              private lateinit var btnVideo: Button
+              private lateinit var btnAudio: Button
+              private lateinit var btnUpdate: Button
+              private lateinit var progressBar: ProgressBar
+              private lateinit var statusText: TextView
+
+              private var isInitialized = false
+              private var isBusy = false
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val scroll = ScrollView(this)
+                  val layout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(48, 48, 48, 48)
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "YT Video / Audio Downloader"
+                      textSize = 20f
+                      setPadding(0, 0, 0, 24)
+                  }
+
+                  urlInput = EditText(this).apply {
+                      hint = "Paste YouTube link here..."
+                      setSingleLine(false)
+                      maxLines = 3
+                  }
+
+                  btnVideo = Button(this).apply {
+                      text = "Download Video (MP4)"
+                      isEnabled = false
+                  }
+
+                  btnAudio = Button(this).apply {
+                      text = "Download Audio (M4A)"
+                      isEnabled = false
+                  }
+
+                  btnUpdate = Button(this).apply {
+                      text = "Update yt-dlp Engine"
+                      isEnabled = false
+                  }
+
+                  progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                      max = 100
+                      progress = 0
+                      layoutParams = LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      ).apply {
+                          topMargin = 32
+                          bottomMargin = 16
+                      }
+                  }
+
+                  statusText = TextView(this).apply {
+                      text = "Initializing engine, please wait..."
+                      textSize = 14f
+                  }
+
+                  layout.addView(title)
+                  layout.addView(urlInput)
+                  layout.addView(btnVideo)
+                  layout.addView(btnAudio)
+                  layout.addView(btnUpdate)
+                  layout.addView(progressBar)
+                  layout.addView(statusText)
+                  scroll.addView(layout)
+                  setContentView(scroll)
+
+                  if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+                      intent.getStringExtra(Intent.EXTRA_TEXT)?.let { shared ->
+                          urlInput.setText(shared)
+                      }
+                  }
+
+                  initEngine()
+
+                  btnVideo.setOnClickListener { startDownload(isAudioOnly = false) }
+                  btnAudio.setOnClickListener { startDownload(isAudioOnly = true) }
+                  btnUpdate.setOnClickListener { updateEngine() }
+              }
+
+              private fun initEngine() {
+                  Thread {
+                      try {
+                          YoutubeDL.getInstance().init(applicationContext)
+                          FFmpeg.getInstance().init(applicationContext)
+                          isInitialized = true
+                          runOnUiThread {
+                              btnVideo.isEnabled = true
+                              btnAudio.isEnabled = true
+                              btnUpdate.isEnabled = true
+                              statusText.text = "Ready! Paste link or Share from YouTube app.\n(First time 'Update yt-dlp Engine' click pannunga)"
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              statusText.text = "Init failed: ${e.message}"
+                          }
+                      }
+                  }.start()
+              }
+
+              private fun updateEngine() {
+                  if (!isInitialized || isBusy) return
+                  isBusy = true
+                  statusText.text = "Updating yt-dlp engine..."
+                  Thread {
+                      try {
+                          val status = YoutubeDL.getInstance().updateYoutubeDL(
+                              applicationContext,
+                              YoutubeDL.UpdateChannel.NIGHTLY
+                          )
+                          runOnUiThread {
+                              statusText.text = "Engine update status: ${status?.name ?: "DONE"}"
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              statusText.text = "Update error: ${e.message}"
+                          }
+                      } finally {
+                          isBusy = false
+                      }
+                  }.start()
+              }
+
+              private fun startDownload(isAudioOnly: Boolean) {
+                  if (!isInitialized || isBusy) return
+
+                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                      checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+                  ) {
+                      requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
+                      statusText.text = "Storage permission allow pannittu thirumba try pannunga."
+                      return
+                  }
+
+                  val url = urlInput.text.toString().trim()
+                  if (url.isEmpty()) {
+                      Toast.makeText(this, "Please enter a URL", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+
+                  isBusy = true
+                  progressBar.progress = 0
+                  statusText.text = "Starting download..."
+
+                  Thread {
+                      val workDir = File(getExternalFilesDir(null), "ytdl_work")
+                      if (workDir.exists()) {
+                          workDir.listFiles()?.forEach { it.delete() }
+                      } else {
+                          workDir.mkdirs()
+                      }
+
+                      try {
+                          val request = YoutubeDLRequest(url).apply {
+                              addOption("-o", "${workDir.absolutePath}/%(title).80s.%(ext)s")
+                              addOption("--no-playlist")
+                              addOption("--no-mtime")
+                              if (isAudioOnly) {
+                                  addOption("-x")
+                                  addOption("--audio-format", "m4a")
+                              } else {
+                                  addOption("-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b")
+                                  addOption("--merge-output-format", "mp4")
+                              }
+                          }
+
+                          YoutubeDL.getInstance().execute(request, null) { progress, etaInSeconds, line ->
+                              runOnUiThread {
+                                  if (progress >= 0f) {
+                                      progressBar.progress = progress.toInt()
+                                      statusText.text = "Downloading: ${progress.toInt()}% (ETA: ${etaInSeconds}s)\n$line"
+                                  } else if (line.isNotBlank()) {
+                                      statusText.text = line
+                                  }
+                              }
+                          }
+
+                          val downloadedFile = workDir.listFiles()?.firstOrNull {
+                              it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl")
+                          }
+
+                          if (downloadedFile == null) {
+                              runOnUiThread {
+                                  statusText.text = "Download mudinjadhu aana file kandupidikala."
+                              }
+                          } else {
+                              val savedName = saveToDownloads(downloadedFile)
+                              downloadedFile.delete()
+                              runOnUiThread {
+                                  progressBar.progress = 100
+                                  statusText.text = "Success! Saved in Downloads/YTDownloader:\n$savedName"
+                              }
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              statusText.text = "Download failed:\n${e.message}"
+                          }
+                      } finally {
+                          isBusy = false
+                      }
+                  }.start()
+              }
+
+              private fun saveToDownloads(sourceFile: File): String {
+                  val ext = sourceFile.extension.lowercase()
+                  val mimeType = when (ext) {
+                      "mp4" -> "video/mp4"
+                      "m4a" -> "audio/mp4"
+                      "mp3" -> "audio/mpeg"
+                      "webm" -> "video/webm"
+                      else -> "application/octet-stream"
+                  }
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                      val values = ContentValues().apply {
+                          put(MediaStore.Downloads.DISPLAY_NAME, sourceFile.name)
+                          put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                          put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/YTDownloader")
+                          put(MediaStore.Downloads.IS_PENDING, 1)
+                      }
+                      val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                          ?: throw RuntimeException("MediaStore insert failed")
+
+                      contentResolver.openOutputStream(uri)?.use { out ->
+                          FileInputStream(sourceFile).use { input ->
+                              input.copyTo(out)
+                          }
+                      }
+                      values.clear()
+                      values.put(MediaStore.Downloads.IS_PENDING, 0)
+                      contentResolver.update(uri, values, null, null)
+                  } else {
+                      val dir = File(
+                          Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                          "YTDownloader"
+                      )
+                      if (!dir.exists()) dir.mkdirs()
+                      val dest = File(dir, sourceFile.name)
+                      FileInputStream(sourceFile).use { input ->
+                          FileOutputStream(dest).use { out ->
+                              input.copyTo(out)
+                          }
+                      }
+                  }
+                  return sourceFile.name
+              }
+          }
+          EOF
+
+      - name: Build Debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTDownloader-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
