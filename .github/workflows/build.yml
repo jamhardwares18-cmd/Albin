@@ -1,4 +1,4 @@
-name: Build YT Downloader APK
+name: Build YT Browser Downloader APK
 
 on:
   push:
@@ -29,22 +29,13 @@ jobs:
 
       - name: Generate Android App Source
         run: |
-          mkdir -p app/src/main/java/com/example/ytdownloader
+          mkdir -p app/src/main/java/com/example/ytdownloader app/src/main/res/xml
 
           cat << 'EOF' > settings.gradle
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
+              repositories { google(); mavenCentral() }
           }
           rootProject.name = "YTDownloader"
           include(":app")
@@ -68,63 +59,54 @@ jobs:
               id 'com.android.application'
               id 'org.jetbrains.kotlin.android'
           }
-
           android {
               namespace 'com.example.ytdownloader'
               compileSdk 34
-
               defaultConfig {
                   applicationId "com.example.ytdownloader"
                   minSdk 24
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-
-                  ndk {
-                      abiFilters 'arm64-v8a', 'armeabi-v7a'
-                  }
+                  versionCode 2
+                  versionName "2.0"
+                  ndk { abiFilters 'arm64-v8a' }
               }
-
-              buildTypes {
-                  debug {
-                      minifyEnabled false
-                  }
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-              kotlinOptions {
-                  jvmTarget = '17'
-              }
+              buildTypes { debug { minifyEnabled false } }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+              kotlinOptions { jvmTarget = '17' }
           }
-
           dependencies {
               implementation 'androidx.core:core-ktx:1.13.1'
               implementation 'androidx.appcompat:appcompat:1.7.0'
+              implementation 'androidx.webkit:webkit:1.11.0'
               implementation 'io.github.junkfood02.youtubedl-android:library:0.18.1'
               implementation 'io.github.junkfood02.youtubedl-android:ffmpeg:0.17.2'
           }
           EOF
 
+          cat << 'EOF' > app/src/main/res/xml/file_paths.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths><external-path name="external_files" path="." /></paths>
+          EOF
+
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
-
               <application
                   android:allowBackup="true"
                   android:label="YT Downloader"
                   android:extractNativeLibs="true"
                   android:usesCleartextTraffic="true"
-                  android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
+                  android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="${applicationId}.fileprovider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+                  </provider>
+                  <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -135,294 +117,741 @@ jobs:
                           <data android:mimeType="text/plain" />
                       </intent-filter>
                   </activity>
-
               </application>
           </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/ytdownloader/Engine.kt
+          package com.example.ytdownloader
+
+          import android.content.*
+          import android.net.Uri
+          import android.os.*
+          import android.provider.MediaStore
+          import android.webkit.WebView
+          import androidx.appcompat.app.AppCompatDelegate
+          import com.yausername.youtubedl_android.*
+          import org.json.*
+          import java.io.*
+          import java.net.*
+          import java.util.*
+          import java.util.concurrent.*
+
+          data class BookmarkItem(val title: String, val url: String)
+          data class BrowserTab(val id: String, var title: String, var url: String, val webView: WebView, val detectedMedia: LinkedHashSet<String> = LinkedHashSet())
+          data class VideoQualityOption(val id: String, val label: String, val subLabel: String, val formatId: String, val ext: String, val sizeBytes: Long, val isAudioOnly: Boolean, val needsAudioMerge: Boolean, val isOriginal: Boolean, val directHttpUrl: String? = null)
+          data class DownloadTask(val id: String, val title: String, val sourceUrl: String, val videoKey: String, val qualityId: String, val qualityLabel: String, var status: String, var progress: Int = 0, var detail: String = "", var processId: String? = null, @Volatile var isCancelled: Boolean = false, @Volatile var isFinished: Boolean = false, var isSuccess: Boolean = false)
+          data class DownloadedRecord(val id: String, val title: String, val sourceUrl: String, val videoKey: String, val qualityId: String, val qualityLabel: String, val sizeText: String, val relativePath: String, val contentUri: String?, val mimeType: String, val timestamp: Long)
+
+          fun formatSizeMb(bytes: Long): String {
+              if (bytes <= 0L) return "Size N/A"
+              val mb = bytes.toDouble() / (1024.0 * 1024.0)
+              return when {
+                  mb >= 100.0 -> String.format(Locale.US, "%.0f MB", mb)
+                  mb >= 1.0 -> String.format(Locale.US, "%.1f MB", mb)
+                  else -> String.format(Locale.US, "%.0f KB", bytes.toDouble() / 1024.0)
+              }
+          }
+
+          object AppStorage {
+              private lateinit var prefs: SharedPreferences
+              fun init(ctx: Context) {
+                  if (!::prefs.isInitialized) {
+                      prefs = ctx.applicationContext.getSharedPreferences("ytdl_prefs", Context.MODE_PRIVATE)
+                      if (!prefs.getBoolean("bm_init", false)) {
+                          saveBookmarks(listOf(BookmarkItem("YouTube", "https://m.youtube.com"), BookmarkItem("Google", "https://www.google.com")))
+                          prefs.edit().putBoolean("bm_init", true).apply()
+                      }
+                  }
+              }
+              fun getThemeMode() = prefs.getInt("theme", 0)
+              fun setThemeMode(m: Int) = prefs.edit().putInt("theme", m).apply()
+              fun applySavedTheme() {
+                  AppCompatDelegate.setDefaultNightMode(when (getThemeMode()) { 1 -> AppCompatDelegate.MODE_NIGHT_NO; 2 -> AppCompatDelegate.MODE_NIGHT_YES; else -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM })
+              }
+              fun isDesktopMode() = prefs.getBoolean("desktop", false)
+              fun setDesktopMode(v: Boolean) = prefs.edit().putBoolean("desktop", v).apply()
+              fun getHomeUrl() = prefs.getString("home", "https://m.youtube.com") ?: "https://m.youtube.com"
+              fun setHomeUrl(u: String) = prefs.edit().putString("home", u.trim().ifEmpty { "https://m.youtube.com" }).apply()
+              fun normalizeUrlKey(u: String) = u.trim().substringBefore("#")
+
+              fun getBookmarks(): MutableList<BookmarkItem> {
+                  val list = mutableListOf<BookmarkItem>()
+                  try {
+                      val arr = JSONArray(prefs.getString("bookmarks", "[]") ?: "[]")
+                      for (i in 0 until arr.length()) arr.getJSONObject(i).let { list.add(BookmarkItem(it.optString("t"), it.optString("u"))) }
+                  } catch (_: Exception) {}
+                  return list
+              }
+              private fun saveBookmarks(list: List<BookmarkItem>) {
+                  val arr = JSONArray()
+                  list.forEach { arr.put(JSONObject().apply { put("t", it.title); put("u", it.url) }) }
+                  prefs.edit().putString("bookmarks", arr.toString()).apply()
+              }
+              fun addBookmark(t: String, u: String) { val l = getBookmarks(); l.removeAll { it.url == u }; l.add(0, BookmarkItem(t.ifBlank { u }, u)); saveBookmarks(l) }
+              fun removeBookmark(u: String) { val l = getBookmarks(); l.removeAll { it.url == u }; saveBookmarks(l) }
+              fun isBookmarked(u: String) = getBookmarks().any { it.url == u }
+
+              private fun getKeySet(): MutableSet<String> {
+                  val s = LinkedHashSet<String>()
+                  try { val a = JSONArray(prefs.getString("dl_keys", "[]") ?: "[]"); for (i in 0 until a.length()) s.add(a.getString(i)) } catch (_: Exception) {}
+                  return s
+              }
+              private fun saveKeySet(s: Set<String>) { val a = JSONArray(); s.forEach { a.put(it) }; prefs.edit().putString("dl_keys", a.toString()).apply() }
+              fun isQualityDownloaded(vk: String, qid: String) = getKeySet().contains("$vk||$qid")
+              fun markQualityDownloaded(vk: String, qid: String) { val s = getKeySet(); s.add("$vk||$qid"); saveKeySet(s) }
+              fun unmarkQualityDownloaded(vk: String, qid: String) { val s = getKeySet(); s.remove("$vk||$qid"); saveKeySet(s) }
+
+              fun getDownloadedRecords(): MutableList<DownloadedRecord> {
+                  val list = mutableListOf<DownloadedRecord>()
+                  try {
+                      val arr = JSONArray(prefs.getString("dl_recs", "[]") ?: "[]")
+                      for (i in 0 until arr.length()) arr.getJSONObject(i).let {
+                          list.add(DownloadedRecord(it.optString("id"), it.optString("t"), it.optString("u"), it.optString("vk"), it.optString("qid"), it.optString("ql"), it.optString("sz"), it.optString("rp"), it.optString("cu").ifEmpty { null }, it.optString("mt", "*/*"), it.optLong("ts", 0L)))
+                      }
+                  } catch (_: Exception) {}
+                  return list
+              }
+              private fun saveRecords(list: List<DownloadedRecord>) {
+                  val arr = JSONArray()
+                  list.forEach { r -> arr.put(JSONObject().apply { put("id", r.id); put("t", r.title); put("u", r.sourceUrl); put("vk", r.videoKey); put("qid", r.qualityId); put("ql", r.qualityLabel); put("sz", r.sizeText); put("rp", r.relativePath); put("cu", r.contentUri ?: ""); put("mt", r.mimeType); put("ts", r.timestamp) }) }
+                  prefs.edit().putString("dl_recs", arr.toString()).apply()
+              }
+              fun addDownloadedRecord(r: DownloadedRecord) { val l = getDownloadedRecords(); l.add(0, r); saveRecords(l) }
+              fun removeDownloadedRecord(r: DownloadedRecord) {
+                  val l = getDownloadedRecords(); l.removeAll { it.id == r.id }; saveRecords(l)
+                  if (r.videoKey.isNotEmpty() && r.qualityId.isNotEmpty()) unmarkQualityDownloaded(r.videoKey, r.qualityId)
+              }
+              fun clearAllHistory() { prefs.edit().putString("dl_recs", "[]").putString("dl_keys", "[]").apply() }
+              fun saveTabs(urls: List<String>, active: Int) { val a = JSONArray(); urls.forEach { a.put(it) }; prefs.edit().putString("tabs", a.toString()).putInt("atab", active).apply() }
+              fun getSavedTabs(): Pair<List<String>, Int> {
+                  val l = mutableListOf<String>()
+                  try { val a = JSONArray(prefs.getString("tabs", "[]") ?: "[]"); for (i in 0 until a.length()) a.getString(i).let { if (it.isNotBlank()) l.add(it) } } catch (_: Exception) {}
+                  return Pair(l, prefs.getInt("atab", 0))
+              }
+          }
+
+          object FolderDownloader {
+              data class DirItem(val url: String, val relPath: String, val depth: Int)
+              data class FileItem(val url: String, val relFolder: String, val fileName: String)
+              data class SavedFileResult(val relativePath: String, val contentUri: String?, val mimeType: String, val totalBytes: Long)
+              data class FolderResult(val rootFolderName: String, val filesDownloaded: Int, val totalBytes: Long, val firstContentUri: String?)
+              private val linkRegex = Regex("""<a\s+[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", RegexOption.IGNORE_CASE)
+
+              fun sanitizeName(raw: String, fallback: String = "item"): String {
+                  val d = try { URLDecoder.decode(raw, "UTF-8") } catch (_: Exception) { raw }
+                  val c = d.replace(Regex("""[\\/:*?"<>|\u0000-\u001F]"""), "_").trim().trim('.')
+                  return if (c.isEmpty() || c == "..") fallback else c
+              }
+              private fun lastSeg(u: String, fb: String) = try { val s = (URI(u).rawPath ?: "").trimEnd('/').substringAfterLast('/', ""); if (s.isEmpty()) fb else sanitizeName(s, fb) } catch (_: Exception) { fb }
+              private fun openConn(u: String, cookies: String?, ua: String) = (URL(u).openConnection() as HttpURLConnection).apply {
+                  connectTimeout = 15000; readTimeout = 30000; instanceFollowRedirects = true
+                  setRequestProperty("User-Agent", ua); if (!cookies.isNullOrBlank()) setRequestProperty("Cookie", cookies)
+              }
+
+              fun downloadRecursive(ctx: Context, startUrl: String, cookies: String?, ua: String, onProg: (String, Int) -> Unit, isCanc: () -> Boolean): FolderResult {
+                  onProg("Scanning folder & subfolders...", 5)
+                  val c0 = openConn(startUrl, cookies, ua)
+                  val code = c0.responseCode; val finalUrl = c0.url.toString().substringBefore("#")
+                  val ct0 = (c0.contentType ?: "").lowercase(); val disp0 = c0.getHeaderField("Content-Disposition") ?: ""
+                  if (code >= 400) { c0.disconnect(); throw RuntimeException("HTTP $code") }
+                  if (!ct0.contains("text/html") || disp0.contains("attachment", true)) {
+                      val fn = headerFilename(disp0, finalUrl)
+                      val sv = c0.inputStream.use { saveStreamToDownloads(ctx, it, "", fn, ct0, c0.contentLengthLong, { p -> onProg("Downloading $fn ($p%)", p) }, isCanc) }
+                      c0.disconnect(); return FolderResult(fn, 1, sv.totalBytes, sv.contentUri)
+                  }
+                  val html0 = c0.inputStream.bufferedReader().use { it.readText() }; c0.disconnect()
+                  val rootName = lastSeg(finalUrl, sanitizeName(URI(finalUrl).host ?: "WebFolder", "WebFolder"))
+                  val rootPrefix = if (finalUrl.endsWith("/")) finalUrl else finalUrl.substringBeforeLast('/') + "/"
+                  val dq = java.util.ArrayDeque<DirItem>(); val visited = HashSet<String>(); val files = ArrayList<FileItem>()
+                  visited.add(finalUrl); parseDir(html0, finalUrl, rootPrefix, rootName, 0, dq, visited, files)
+                  var scanned = 1
+                  while (dq.isNotEmpty() && scanned < 200) {
+                      if (isCanc()) throw InterruptedException("Cancelled")
+                      val d = dq.removeFirst(); scanned++; onProg("Scanning ${d.relPath} (${files.size} files)...", 10)
+                      try {
+                          val c = openConn(d.url, cookies, ua)
+                          if (c.responseCode < 400) {
+                              val ru = c.url.toString().substringBefore("#"); val ct = (c.contentType ?: "").lowercase()
+                              if (ct.contains("text/html")) { val h = c.inputStream.bufferedReader().use { it.readText() }; c.disconnect(); parseDir(h, ru, rootPrefix, d.relPath, d.depth, dq, visited, files) }
+                              else { c.disconnect(); files.add(FileItem(ru, d.relPath.substringBeforeLast('/', rootName), lastSeg(ru, "file_${files.size}"))) }
+                          } else c.disconnect()
+                      } catch (_: Exception) {}
+                  }
+                  if (files.isEmpty()) throw RuntimeException("No downloadable files found in folder.")
+                  var ok = 0; var bytes = 0L; var firstUri: String? = null
+                  files.forEachIndexed { i, fi ->
+                      if (isCanc()) throw InterruptedException("Cancelled")
+                      onProg("(${i + 1}/${files.size}) ${fi.relFolder}/${fi.fileName}", (15 + ((i.toFloat() / files.size) * 85f).toInt()).coerceIn(15, 99))
+                      try {
+                          val c = openConn(fi.url, cookies, ua)
+                          if (c.responseCode in 200..299) {
+                              val ct = (c.contentType ?: "").lowercase(); val disp = c.getHeaderField("Content-Disposition") ?: ""
+                              if (!(ct.contains("text/html") && !disp.contains("attachment", true) && !fi.fileName.endsWith(".html", true) && !fi.fileName.endsWith(".htm", true))) {
+                                  val fn = if (disp.isNotBlank()) headerFilename(disp, fi.url, fi.fileName) else fi.fileName
+                                  val sv = c.inputStream.use { saveStreamToDownloads(ctx, it, fi.relFolder, fn, ct, c.contentLengthLong, {}, isCanc) }
+                                  ok++; bytes += sv.totalBytes; if (firstUri == null) firstUri = sv.contentUri
+                              }
+                          }
+                          c.disconnect()
+                      } catch (e: InterruptedException) { throw e } catch (_: Exception) {}
+                  }
+                  onProg("Done: $ok files saved in $rootName", 100)
+                  return FolderResult(rootName, ok, bytes, firstUri)
+              }
+
+              private fun parseDir(html: String, baseUrl: String, rootPrefix: String, relPath: String, depth: Int, dq: java.util.ArrayDeque<DirItem>, visited: HashSet<String>, files: MutableList<FileItem>) {
+                  val base = try { URI(baseUrl) } catch (_: Exception) { return }
+                  val seen = HashSet<String>()
+                  for (m in linkRegex.findAll(html)) {
+                      val href = (m.groupValues[1].ifEmpty { m.groupValues[2].ifEmpty { m.groupValues[3] } }).trim().replace("&amp;", "&")
+                      if (href.isEmpty() || href.startsWith("#") || href.startsWith("?") || href.startsWith("javascript:", true) || href.startsWith("mailto:", true) || href == "." || href == "./" || href == ".." || href == "../") continue
+                      val res = try { base.resolve(href).toString().substringBefore("#") } catch (_: Exception) { continue }
+                      if (!res.startsWith(rootPrefix) || res.substringBefore('?') == baseUrl.substringBefore('?')) continue
+                      val ru = try { URI(res) } catch (_: Exception) { continue }
+                      if ((ru.rawPath ?: "").endsWith("/") && ru.query.isNullOrEmpty()) {
+                          if (visited.add(res) && depth < 10) dq.addLast(DirItem(res, "$relPath/${lastSeg(res, "Sub")}", depth + 1))
+                      } else if (seen.add(res)) files.add(FileItem(res, relPath, lastSeg(res, "file_${files.size + 1}")))
+                  }
+              }
+
+              fun downloadSingleDirectFile(ctx: Context, url: String, cookies: String?, ua: String, sugName: String?, onProg: (String, Int) -> Unit, isCanc: () -> Boolean): SavedFileResult {
+                  val c = openConn(url, cookies, ua)
+                  if (c.responseCode >= 400) { c.disconnect(); throw RuntimeException("HTTP ${c.responseCode}") }
+                  val ct = (c.contentType ?: "application/octet-stream").substringBefore(";").trim()
+                  val fn = headerFilename(c.getHeaderField("Content-Disposition") ?: "", c.url.toString(), sugName)
+                  val sv = c.inputStream.use { saveStreamToDownloads(ctx, it, "", fn, ct, c.contentLengthLong, { p -> onProg("Downloading $fn ($p%)", p) }, isCanc) }
+                  c.disconnect(); return sv
+              }
+
+              private fun headerFilename(disp: String, url: String, fb: String? = null): String {
+                  val m = Regex("""filename\*?=(?:UTF-8''|"?)([^";]+)""", RegexOption.IGNORE_CASE).find(disp)
+                  if (m != null && m.groupValues[1].trim().trim('"').isNotEmpty()) return sanitizeName(m.groupValues[1].trim().trim('"'))
+                  if (!fb.isNullOrBlank()) return sanitizeName(fb)
+                  return lastSeg(url, "dl_${System.currentTimeMillis()}")
+              }
+
+              fun saveStreamToDownloads(ctx: Context, inp: InputStream, subFolder: String, fileName: String, mimeHint: String, expLen: Long, onPct: (Int) -> Unit, isCanc: () -> Boolean): SavedFileResult {
+                  val cleanSub = subFolder.trim('/').split('/').filter { it.isNotBlank() }.joinToString("/") { sanitizeName(it, "Folder") }
+                  val cleanName = sanitizeName(fileName, "file"); val mime = guessMime(cleanName, mimeHint)
+                  val relDir = if (cleanSub.isEmpty()) "${Environment.DIRECTORY_DOWNLOADS}/YTDownloader" else "${Environment.DIRECTORY_DOWNLOADS}/YTDownloader/$cleanSub"
+                  val buf = ByteArray(16 * 1024); var readTotal = 0L; var lastPct = -1
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                      val r = ctx.contentResolver
+                      val cv = ContentValues().apply { put(MediaStore.Downloads.DISPLAY_NAME, cleanName); put(MediaStore.Downloads.MIME_TYPE, mime); put(MediaStore.Downloads.RELATIVE_PATH, relDir); put(MediaStore.Downloads.IS_PENDING, 1) }
+                      val uri = r.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: throw RuntimeException("MediaStore error")
+                      try {
+                          r.openOutputStream(uri)?.use { out ->
+                              while (true) {
+                                  if (isCanc()) throw InterruptedException("Cancelled")
+                                  val n = inp.read(buf); if (n == -1) break
+                                  out.write(buf, 0, n); readTotal += n
+                                  if (expLen > 0) ((readTotal * 100) / expLen).toInt().coerceIn(0, 100).let { if (it != lastPct) { lastPct = it; onPct(it) } }
+                              }
+                          }
+                          cv.clear(); cv.put(MediaStore.Downloads.IS_PENDING, 0); r.update(uri, cv, null, null)
+                      } catch (e: Exception) { r.delete(uri, null, null); throw e }
+                      return SavedFileResult("$relDir/$cleanName", uri.toString(), mime, readTotal)
+                  } else {
+                      val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), if (cleanSub.isEmpty()) "YTDownloader" else "YTDownloader/$cleanSub")
+                      if (!dir.exists()) dir.mkdirs()
+                      val dest = File(dir, cleanName)
+                      try {
+                          FileOutputStream(dest).use { out ->
+                              while (true) {
+                                  if (isCanc()) throw InterruptedException("Cancelled")
+                                  val n = inp.read(buf); if (n == -1) break
+                                  out.write(buf, 0, n); readTotal += n
+                                  if (expLen > 0) ((readTotal * 100) / expLen).toInt().coerceIn(0, 100).let { if (it != lastPct) { lastPct = it; onPct(it) } }
+                              }
+                          }
+                      } catch (e: Exception) { dest.delete(); throw e }
+                      return SavedFileResult(dest.absolutePath, null, mime, readTotal)
+                  }
+              }
+
+              fun guessMime(fn: String, hint: String) = when (fn.substringAfterLast('.', "").lowercase()) {
+                  "mp4" -> "video/mp4"; "mkv" -> "video/x-matroska"; "webm" -> "video/webm"; "m4a" -> "audio/mp4"; "mp3" -> "audio/mpeg"
+                  "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "pdf" -> "application/pdf"; "zip" -> "application/zip"; "apk" -> "application/vnd.android.package-archive"
+                  else -> if (hint.contains("/") && !hint.contains("html")) hint.substringBefore(";").trim() else "application/octet-stream"
+              }
+          }
+
+          object DownloadCenter {
+              val tasks = CopyOnWriteArrayList<DownloadTask>()
+              private val exec = Executors.newFixedThreadPool(3)
+              private val handler = Handler(Looper.getMainLooper())
+              var onStateChanged: (() -> Unit)? = null
+              fun activeCount() = tasks.count { !it.isFinished }
+              fun isQualityDownloading(vk: String, qid: String) = tasks.any { !it.isFinished && it.videoKey == vk && it.qualityId == qid }
+              private fun notifyUI() { handler.post { onStateChanged?.invoke() } }
+
+              fun cancelTask(id: String) {
+                  val t = tasks.find { it.id == id } ?: return
+                  t.isCancelled = true; t.status = "Cancelling..."
+                  t.processId?.let { pid -> Thread { try { YoutubeDL.getInstance().destroyProcessById(pid) } catch (_: Exception) {} }.start() }
+                  notifyUI()
+              }
+              fun clearFinishedTasks() { tasks.removeAll { it.isFinished }; notifyUI() }
+
+              fun enqueueVideoQualityDownload(ctx: Context, vk: String, title: String, pageUrl: String, q: VideoQualityOption, cookies: String?, ua: String) {
+                  val app = ctx.applicationContext; val tid = UUID.randomUUID().toString(); val pid = "yt_${System.currentTimeMillis()}_${tasks.size}"
+                  val task = DownloadTask(tid, title, pageUrl, vk, q.id, q.label, "Queued", 0, formatSizeMb(q.sizeBytes), pid)
+                  tasks.add(0, task); notifyUI()
+                  exec.execute {
+                      val workDir = File(app.getExternalFilesDir(null), "work_$tid"); workDir.mkdirs()
+                      try {
+                          if (task.isCancelled) throw InterruptedException("Cancelled")
+                          task.status = "Downloading"; notifyUI()
+                          if (q.directHttpUrl != null) {
+                              val sv = FolderDownloader.downloadSingleDirectFile(app, q.directHttpUrl, cookies, ua, "${FolderDownloader.sanitizeName(title, "video")}_${q.label}.${q.ext.ifBlank { "mp4" }}", { s, p -> task.progress = p; task.detail = s; notifyUI() }, { task.isCancelled })
+                              AppStorage.markQualityDownloaded(vk, q.id)
+                              AppStorage.addDownloadedRecord(DownloadedRecord(tid, title, pageUrl, vk, q.id, q.label, formatSizeMb(sv.totalBytes), sv.relativePath, sv.contentUri, sv.mimeType, System.currentTimeMillis()))
+                              task.progress = 100; task.status = "Completed"; task.detail = "Saved (${formatSizeMb(sv.totalBytes)}) ✓✓"; task.isSuccess = true; task.isFinished = true; notifyUI(); return@execute
+                          }
+                          val req = YoutubeDLRequest(pageUrl).apply {
+                              addOption("-o", "${workDir.absolutePath}/%(title).70s_${FolderDownloader.sanitizeName(q.label, q.id)}.%(ext)s")
+                              addOption("--no-playlist"); addOption("--no-mtime")
+                              if (q.isAudioOnly) { addOption("-f", "ba/b"); addOption("-x"); addOption("--audio-format", q.ext) }
+                              else if (q.needsAudioMerge) { addOption("-f", "${q.formatId}+ba[ext=m4a]/${q.formatId}+ba/b"); addOption("--merge-output-format", "mp4") }
+                              else addOption("-f", q.formatId)
+                          }
+                          YoutubeDL.getInstance().execute(req, pid) { p, eta, line ->
+                              if (task.isCancelled) return@execute
+                              if (p >= 0f) { task.progress = p.toInt().coerceIn(0, 99); task.detail = "${task.progress}% • ETA ${eta}s" }
+                              else if (line.isNotBlank()) task.detail = line.take(80)
+                              notifyUI()
+                          }
+                          if (task.isCancelled) throw InterruptedException("Cancelled")
+                          val out = workDir.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") } ?: throw RuntimeException("Output file missing")
+                          val sv = FileInputStream(out).use { FolderDownloader.saveStreamToDownloads(app, it, "", out.name, FolderDownloader.guessMime(out.name, ""), out.length(), {}, { task.isCancelled }) }
+                          AppStorage.markQualityDownloaded(vk, q.id)
+                          AppStorage.addDownloadedRecord(DownloadedRecord(tid, title, pageUrl, vk, q.id, q.label, formatSizeMb(sv.totalBytes), sv.relativePath, sv.contentUri, sv.mimeType, System.currentTimeMillis()))
+                          task.progress = 100; task.status = "Completed"; task.detail = "Saved (${formatSizeMb(sv.totalBytes)}) ✓✓"; task.isSuccess = true; task.isFinished = true
+                      } catch (_: InterruptedException) { task.status = "Cancelled"; task.detail = "Stopped"; task.isFinished = true }
+                      catch (e: Exception) { task.status = if (task.isCancelled) "Cancelled" else "Failed"; task.detail = (e.message ?: "Error").take(120); task.isFinished = true }
+                      finally { workDir.deleteRecursively(); notifyUI() }
+                  }
+              }
+
+              fun enqueueFolderDownload(ctx: Context, folderUrl: String, cookies: String?, ua: String) {
+                  val app = ctx.applicationContext; val tid = UUID.randomUUID().toString()
+                  val sn = FolderDownloader.sanitizeName(folderUrl.trimEnd('/').substringAfterLast('/', "Folder"), "Folder")
+                  val task = DownloadTask(tid, "📁 $sn", folderUrl, "", "", "Folder", "Scanning", 0, "Scanning...")
+                  tasks.add(0, task); notifyUI()
+                  exec.execute {
+                      try {
+                          val res = FolderDownloader.downloadRecursive(app, folderUrl, cookies, ua, { m, p -> task.status = "Downloading"; task.progress = p; task.detail = m; notifyUI() }, { task.isCancelled })
+                          AppStorage.addDownloadedRecord(DownloadedRecord(tid, "📁 ${res.rootFolderName} (${res.filesDownloaded} files)", folderUrl, "", "", "Folder", formatSizeMb(res.totalBytes), "Download/YTDownloader/${res.rootFolderName}", res.firstContentUri, "*/*", System.currentTimeMillis()))
+                          task.progress = 100; task.status = "Completed"; task.detail = "${res.filesDownloaded} files saved"; task.isSuccess = true; task.isFinished = true
+                      } catch (_: InterruptedException) { task.status = "Cancelled"; task.detail = "Stopped"; task.isFinished = true }
+                      catch (e: Exception) { task.status = "Failed"; task.detail = (e.message ?: "Error").take(120); task.isFinished = true }
+                      finally { notifyUI() }
+                  }
+              }
+
+              fun enqueueDirectFileDownload(ctx: Context, url: String, sugName: String?, cookies: String?, ua: String) {
+                  val app = ctx.applicationContext; val tid = UUID.randomUUID().toString()
+                  val lbl = sugName ?: url.substringAfterLast('/').substringBefore('?').ifBlank { "File" }
+                  val task = DownloadTask(tid, lbl, url, "", "", "File", "Downloading", 0, "Connecting...")
+                  tasks.add(0, task); notifyUI()
+                  exec.execute {
+                      try {
+                          val sv = FolderDownloader.downloadSingleDirectFile(app, url, cookies, ua, sugName, { m, p -> task.progress = p; task.detail = m; notifyUI() }, { task.isCancelled })
+                          AppStorage.addDownloadedRecord(DownloadedRecord(tid, lbl, url, "", "", "File", formatSizeMb(sv.totalBytes), sv.relativePath, sv.contentUri, sv.mimeType, System.currentTimeMillis()))
+                          task.progress = 100; task.status = "Completed"; task.detail = "Saved (${formatSizeMb(sv.totalBytes)})"; task.isSuccess = true; task.isFinished = true
+                      } catch (_: InterruptedException) { task.status = "Cancelled"; task.detail = "Stopped"; task.isFinished = true }
+                      catch (e: Exception) { task.status = "Failed"; task.detail = (e.message ?: "Error").take(120); task.isFinished = true }
+                      finally { notifyUI() }
+                  }
+              }
+          }
           EOF
 
           cat << 'EOF' > app/src/main/java/com/example/ytdownloader/MainActivity.kt
           package com.example.ytdownloader
 
           import android.Manifest
-          import android.content.ContentValues
-          import android.content.Intent
+          import android.annotation.SuppressLint
+          import android.app.AlertDialog
+          import android.content.*
           import android.content.pm.PackageManager
-          import android.os.Build
-          import android.os.Bundle
-          import android.os.Environment
-          import android.provider.MediaStore
-          import android.view.ViewGroup
+          import android.content.res.Configuration
+          import android.graphics.*
+          import android.graphics.drawable.GradientDrawable
+          import android.net.Uri
+          import android.os.*
+          import android.text.TextUtils
+          import android.util.Patterns
+          import android.view.*
+          import android.view.inputmethod.*
+          import android.webkit.*
           import android.widget.*
+          import androidx.activity.OnBackPressedCallback
           import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.content.FileProvider
+          import androidx.webkit.*
           import com.yausername.ffmpeg.FFmpeg
-          import com.yausername.youtubedl_android.YoutubeDL
-          import com.yausername.youtubedl_android.YoutubeDLRequest
+          import com.yausername.youtubedl_android.*
+          import org.json.*
           import java.io.File
-          import java.io.FileInputStream
-          import java.io.FileOutputStream
+          import java.net.*
+          import java.text.SimpleDateFormat
+          import java.util.*
 
           class MainActivity : AppCompatActivity() {
-
+              private val tabs = mutableListOf<BrowserTab>()
+              private var activeIdx = -1
               private lateinit var urlInput: EditText
-              private lateinit var btnVideo: Button
-              private lateinit var btnAudio: Button
-              private lateinit var btnUpdate: Button
-              private lateinit var progressBar: ProgressBar
-              private lateinit var statusText: TextView
-
-              private var isInitialized = false
-              private var isBusy = false
+              private lateinit var btnBack: TextView; private lateinit var btnFwd: TextView; private lateinit var btnStar: TextView
+              private lateinit var btnTabs: TextView; private lateinit var btnDl: TextView
+              private lateinit var progBar: ProgressBar; private lateinit var webBox: FrameLayout; private lateinit var fsBox: FrameLayout
+              private lateinit var topBar: LinearLayout; private lateinit var fabDl: TextView
+              private var customView: View? = null; private var customCb: WebChromeClient.CustomViewCallback? = null
+              @Volatile private var engineReady = false
+              private val handler = Handler(Looper.getMainLooper())
+              private val desktopUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+              private var mobileUA = ""
 
               override fun onCreate(savedInstanceState: Bundle?) {
+                  AppStorage.init(applicationContext); AppStorage.applySavedTheme()
                   super.onCreate(savedInstanceState)
+                  mobileUA = WebSettings.getDefaultUserAgent(this)
+                  buildUi()
+                  Thread {
+                      try { YoutubeDL.getInstance().init(applicationContext); FFmpeg.getInstance().init(applicationContext); engineReady = true }
+                      catch (e: Exception) { handler.post { Toast.makeText(this, "Init warning: ${e.message}", Toast.LENGTH_LONG).show() } }
+                  }.start()
+                  onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+                      override fun handleOnBackPressed() {
+                          if (customView != null) { customCb?.onCustomViewHidden(); return }
+                          val w = activeTab()?.webView
+                          if (w != null && w.canGoBack()) w.goBack() else if (tabs.size > 1) closeTab(activeIdx) else finish()
+                      }
+                  })
+                  val shared = if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") intent.getStringExtra(Intent.EXTRA_TEXT) else null
+                  val (savedUrls, sIdx) = AppStorage.getSavedTabs()
+                  if (!shared.isNullOrBlank()) {
+                      val u = Patterns.WEB_URL.matcher(shared).let { if (it.find()) it.group() else shared }
+                      savedUrls.forEach { createTab(it, false) }; createTab(u, true)
+                  } else if (savedUrls.isNotEmpty()) { savedUrls.forEach { createTab(it, false) }; switchTab(sIdx.coerceIn(0, tabs.lastIndex)) }
+                  else createTab(AppStorage.getHomeUrl(), true)
+                  DownloadCenter.onStateChanged = { updateDlBadge() }; updateDlBadge()
+              }
 
-                  val scroll = ScrollView(this)
-                  val layout = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      setPadding(48, 48, 48, 48)
-                  }
+              private fun isNight() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+              private fun activeTab() = tabs.getOrNull(activeIdx)
 
-                  val title = TextView(this).apply {
-                      text = "YT Video / Audio Downloader"
-                      textSize = 20f
-                      setPadding(0, 0, 0, 24)
-                  }
-
+              private fun buildUi() {
+                  val night = isNight()
+                  val txtP = if (night) Color.WHITE else Color.parseColor("#111111")
+                  val txtS = if (night) Color.parseColor("#BBBBBB") else Color.parseColor("#555555")
+                  val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(if (night) Color.parseColor("#121212") else Color.parseColor("#F5F5F7")); fitsSystemWindows = true }
+                  topBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setBackgroundColor(if (night) Color.parseColor("#1E1E1E") else Color.WHITE); setPadding(dp(6), dp(6), dp(6), dp(6)); elevation = dp(4).toFloat() }
+                  fun btn(s: String, sp: Float = 16f) = TextView(this).apply { text = s; textSize = sp; setTextColor(txtP); gravity = Gravity.CENTER; setPadding(dp(6), dp(6), dp(6), dp(6)) }
+                  btnBack = btn("◀", 14f).apply { setOnClickListener { activeTab()?.webView?.let { if (it.canGoBack()) it.goBack() } } }
+                  btnFwd = btn("▶", 14f).apply { setOnClickListener { activeTab()?.webView?.let { if (it.canGoForward()) it.goForward() } } }
                   urlInput = EditText(this).apply {
-                      hint = "Paste YouTube link here..."
-                      setSingleLine(false)
-                      maxLines = 3
+                      hint = "URL or Search..."; setHintTextColor(txtS); setTextColor(txtP); textSize = 13f; isSingleLine = true
+                      imeOptions = EditorInfo.IME_ACTION_GO; setSelectAllOnFocus(true)
+                      background = GradientDrawable().apply { setColor(if (night) Color.parseColor("#2C2C2E") else Color.parseColor("#EBEBF0")); cornerRadius = dp(18).toFloat() }
+                      setPadding(dp(12), dp(7), dp(12), dp(7))
+                      layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) }
+                      setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_GO || id == EditorInfo.IME_ACTION_DONE) { goUrl(); true } else false }
                   }
-
-                  btnVideo = Button(this).apply {
-                      text = "Download Video (MP4)"
-                      isEnabled = false
+                  val btnRel = btn("↻", 17f).apply { setOnClickListener { activeTab()?.webView?.reload() } }
+                  btnStar = btn("☆", 18f).apply { setOnClickListener { toggleBm() } }
+                  btnTabs = btn("1", 12f).apply { typeface = Typeface.DEFAULT_BOLD; background = GradientDrawable().apply { setStroke(dp(1), txtS); cornerRadius = dp(5).toFloat() }; setOnClickListener { showTabsDialog() } }
+                  btnDl = btn("⬇", 16f).apply { typeface = Typeface.DEFAULT_BOLD; setOnClickListener { showDownloadsDialog(0) } }
+                  val btnMenu = btn("⋮", 18f).apply { setOnClickListener { showMainMenu() } }
+                  listOf(btnBack, btnFwd, urlInput, btnRel, btnStar, btnTabs, btnDl, btnMenu).forEach { topBar.addView(it) }
+                  progBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; visibility = View.GONE; layoutParams = LinearLayout.LayoutParams(-1, dp(3)) }
+                  val wrap = FrameLayout(this).apply { layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
+                  webBox = FrameLayout(this).apply { layoutParams = FrameLayout.LayoutParams(-1, -1) }
+                  fabDl = TextView(this).apply {
+                      text = "⬇ Video Quality"; setTextColor(Color.WHITE); textSize = 13f; typeface = Typeface.DEFAULT_BOLD
+                      setPadding(dp(16), dp(11), dp(16), dp(11)); elevation = dp(8).toFloat()
+                      background = GradientDrawable().apply { setColor(Color.parseColor("#E53935")); cornerRadius = dp(24).toFloat() }
+                      layoutParams = FrameLayout.LayoutParams(-2, -2).apply { gravity = Gravity.BOTTOM or Gravity.END; rightMargin = dp(16); bottomMargin = dp(20) }
+                      setOnClickListener { activeTab()?.let { fetchQualities(it.url, it.detectedMedia.toList()) } }
                   }
-
-                  btnAudio = Button(this).apply {
-                      text = "Download Audio (M4A)"
-                      isEnabled = false
-                  }
-
-                  btnUpdate = Button(this).apply {
-                      text = "Update yt-dlp Engine"
-                      isEnabled = false
-                  }
-
-                  progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-                      max = 100
-                      progress = 0
-                      layoutParams = LinearLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                          ViewGroup.LayoutParams.WRAP_CONTENT
-                      ).apply {
-                          topMargin = 32
-                          bottomMargin = 16
-                      }
-                  }
-
-                  statusText = TextView(this).apply {
-                      text = "Initializing engine, please wait..."
-                      textSize = 14f
-                  }
-
-                  layout.addView(title)
-                  layout.addView(urlInput)
-                  layout.addView(btnVideo)
-                  layout.addView(btnAudio)
-                  layout.addView(btnUpdate)
-                  layout.addView(progressBar)
-                  layout.addView(statusText)
-                  scroll.addView(layout)
-                  setContentView(scroll)
-
-                  if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
-                      intent.getStringExtra(Intent.EXTRA_TEXT)?.let { shared ->
-                          urlInput.setText(shared)
-                      }
-                  }
-
-                  initEngine()
-
-                  btnVideo.setOnClickListener { startDownload(isAudioOnly = false) }
-                  btnAudio.setOnClickListener { startDownload(isAudioOnly = true) }
-                  btnUpdate.setOnClickListener { updateEngine() }
+                  fsBox = FrameLayout(this).apply { setBackgroundColor(Color.BLACK); visibility = View.GONE; layoutParams = FrameLayout.LayoutParams(-1, -1) }
+                  wrap.addView(webBox); wrap.addView(fabDl); wrap.addView(fsBox)
+                  root.addView(topBar); root.addView(progBar); root.addView(wrap)
+                  setContentView(root)
               }
 
-              private fun initEngine() {
+              @SuppressLint("SetJavaScriptEnabled")
+              private fun createWebView(): WebView {
+                  val wv = WebView(this); applyWvSettings(wv)
+                  wv.webChromeClient = object : WebChromeClient() {
+                      override fun onProgressChanged(v: WebView?, p: Int) { if (v == activeTab()?.webView) { progBar.visibility = if (p in 1..99) View.VISIBLE else View.GONE; progBar.progress = p } }
+                      override fun onReceivedTitle(v: WebView?, t: String?) { tabs.find { it.webView == v }?.let { if (!t.isNullOrBlank()) it.title = t } }
+                      override fun onShowCustomView(v: View?, cb: CustomViewCallback?) {
+                          if (customView != null) { cb?.onCustomViewHidden(); return }
+                          customView = v; customCb = cb; fsBox.addView(v); fsBox.visibility = View.VISIBLE; topBar.visibility = View.GONE; fabDl.visibility = View.GONE
+                      }
+                      override fun onHideCustomView() { fsBox.removeAllViews(); fsBox.visibility = View.GONE; customView = null; customCb = null; topBar.visibility = View.VISIBLE; fabDl.visibility = View.VISIBLE }
+                  }
+                  wv.webViewClient = object : WebViewClient() {
+                      override fun shouldOverrideUrlLoading(v: WebView?, r: WebResourceRequest?) = !(r?.url?.toString()?.let { it.startsWith("http://") || it.startsWith("https://") } ?: false)
+                      override fun onPageStarted(v: WebView?, u: String?, f: Bitmap?) {
+                          tabs.find { it.webView == v }?.let { t -> if (!u.isNullOrBlank()) { t.url = u; if (t == activeTab()) { urlInput.setText(u); updateStar() } }; t.detectedMedia.clear() }
+                      }
+                      override fun onPageFinished(v: WebView?, u: String?) {
+                          tabs.find { it.webView == v }?.let { t ->
+                              if (!u.isNullOrBlank()) t.url = u; if (!v?.title.isNullOrBlank()) t.title = v?.title ?: t.title
+                              if (t == activeTab()) { urlInput.setText(t.url); updateStar(); btnBack.alpha = if (v?.canGoBack() == true) 1f else 0.4f; btnFwd.alpha = if (v?.canGoForward() == true) 1f else 0.4f }
+                              if (tabs.isNotEmpty()) AppStorage.saveTabs(tabs.map { it.url }, activeIdx.coerceAtLeast(0))
+                          }
+                      }
+                      override fun shouldInterceptRequest(v: WebView?, r: WebResourceRequest?): WebResourceResponse? {
+                          val ru = r?.url?.toString() ?: return null; val l = ru.lowercase()
+                          if ((l.contains(".mp4") || l.contains(".m3u8") || l.contains(".webm")) && !l.endsWith(".ts") && !l.contains(".js") && !l.contains(".css")) {
+                              tabs.find { it.webView == v }?.let { if (it.detectedMedia.size < 20) it.detectedMedia.add(ru) }
+                          }
+                          return super.shouldInterceptRequest(v, r)
+                      }
+                  }
+                  wv.setDownloadListener { url, ua, cd, mt, _ ->
+                      if (!ensurePerm()) return@setDownloadListener
+                      val fn = URLUtil.guessFileName(url, cd, mt); val ck = CookieManager.getInstance().getCookie(url)
+                      AlertDialog.Builder(this).setTitle("Download File").setMessage("Download $fn?").setPositiveButton("Download") { _, _ ->
+                          DownloadCenter.enqueueDirectFileDownload(this, url, fn, ck, ua); Toast.makeText(this, "Added to Downloader", Toast.LENGTH_SHORT).show()
+                      }.setNegativeButton("Cancel", null).show()
+                  }
+                  wv.setOnLongClickListener {
+                      val h = wv.hitTestResult; val u = h.extra
+                      if ((h.type == WebView.HitTestResult.SRC_ANCHOR_TYPE || h.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) && !u.isNullOrBlank() && (u.startsWith("http://") || u.startsWith("https://"))) {
+                          showLongPressMenu(u); true
+                      } else false
+                  }
+                  return wv
+              }
+
+              @SuppressLint("SetJavaScriptEnabled")
+              private fun applyWvSettings(wv: WebView) {
+                  val d = AppStorage.isDesktopMode()
+                  wv.settings.apply { javaScriptEnabled = true; domStorageEnabled = true; databaseEnabled = true; mediaPlaybackRequiresUserGesture = false; builtInZoomControls = true; displayZoomControls = false; useWideViewPort = true; loadWithOverviewMode = d; userAgentString = if (d) desktopUA else mobileUA; mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE }
+                  try { if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) WebSettingsCompat.setAlgorithmicDarkeningAllowed(wv.settings, isNight()) } catch (_: Throwable) {}
+              }
+
+              private fun showLongPressMenu(target: String) {
+                  val opts = arrayOf("📁 Download Folder & Subfolders (Same Names)", "📄 Download Link as File", "🎬 Check Video Qualities (yt-dlp)", "➕ Open in New Page", "📋 Copy Link")
+                  AlertDialog.Builder(this).setTitle(target.take(65)).setItems(opts) { _, w ->
+                      val ck = CookieManager.getInstance().getCookie(target); val ua = activeTab()?.webView?.settings?.userAgentString ?: mobileUA
+                      when (w) {
+                          0 -> if (ensurePerm()) { DownloadCenter.enqueueFolderDownload(this, target, ck, ua); Toast.makeText(this, "Folder & Subfolders download started!", Toast.LENGTH_SHORT).show() }
+                          1 -> if (ensurePerm()) { DownloadCenter.enqueueDirectFileDownload(this, target, null, ck, ua); Toast.makeText(this, "File download started!", Toast.LENGTH_SHORT).show() }
+                          2 -> fetchQualities(target)
+                          3 -> createTab(target, true)
+                          4 -> { (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("URL", target)); Toast.makeText(this, "Copied!", Toast.LENGTH_SHORT).show() }
+                      }
+                  }.show()
+              }
+
+              private fun normUrl(s: String): String {
+                  val t = s.trim()
+                  return when { t.startsWith("http://", true) || t.startsWith("https://", true) -> t; !t.contains(" ") && t.contains(".") -> "https://$t"; else -> "https://www.google.com/search?q=" + Uri.encode(t) }
+              }
+              private fun goUrl() {
+                  val r = urlInput.text.toString().trim(); if (r.isEmpty()) return
+                  (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(urlInput.windowToken, 0)
+                  urlInput.clearFocus(); activeTab()?.webView?.loadUrl(normUrl(r))
+              }
+              private fun createTab(u: String, sw: Boolean) {
+                  val fu = normUrl(u); val wv = createWebView(); tabs.add(BrowserTab(UUID.randomUUID().toString(), fu, fu, wv)); wv.loadUrl(fu)
+                  if (sw) switchTab(tabs.lastIndex) else btnTabs.text = tabs.size.toString()
+                  AppStorage.saveTabs(tabs.map { it.url }, activeIdx.coerceAtLeast(0))
+              }
+              private fun switchTab(i: Int) {
+                  if (i !in tabs.indices) return; activeIdx = i; val t = tabs[i]
+                  webBox.removeAllViews(); (t.webView.parent as? ViewGroup)?.removeView(t.webView); webBox.addView(t.webView, FrameLayout.LayoutParams(-1, -1))
+                  urlInput.setText(t.url); btnTabs.text = tabs.size.toString(); updateStar()
+                  btnBack.alpha = if (t.webView.canGoBack()) 1f else 0.4f; btnFwd.alpha = if (t.webView.canGoForward()) 1f else 0.4f
+                  AppStorage.saveTabs(tabs.map { it.url }, activeIdx)
+              }
+              private fun closeTab(i: Int) {
+                  if (i !in tabs.indices) return; val rem = tabs.removeAt(i); webBox.removeView(rem.webView); rem.webView.destroy()
+                  if (tabs.isEmpty()) createTab(AppStorage.getHomeUrl(), true) else switchTab(i.coerceAtMost(tabs.lastIndex))
+              }
+              private fun updateStar() {
+                  val s = AppStorage.isBookmarked(activeTab()?.url ?: ""); btnStar.text = if (s) "★" else "☆"
+                  btnStar.setTextColor(if (s) Color.parseColor("#FFB300") else if (isNight()) Color.WHITE else Color.parseColor("#111111"))
+              }
+              private fun updateDlBadge() {
+                  val c = DownloadCenter.activeCount(); btnDl.text = if (c > 0) "⬇$c" else "⬇"
+                  btnDl.setTextColor(if (c > 0) Color.parseColor("#2979FF") else if (isNight()) Color.WHITE else Color.parseColor("#111111"))
+              }
+              private fun toggleBm() {
+                  val t = activeTab() ?: return
+                  if (AppStorage.isBookmarked(t.url)) { AppStorage.removeBookmark(t.url); Toast.makeText(this, "Bookmark removed", Toast.LENGTH_SHORT).show() }
+                  else { AppStorage.addBookmark(t.title, t.url); Toast.makeText(this, "Bookmark added!", Toast.LENGTH_SHORT).show() }
+                  updateStar()
+              }
+
+              private fun showTabsDialog() {
+                  val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(10), dp(14), dp(10)) }
+                  val add = Button(this).apply { text = "➕ Add Page (New Tab)" }; box.addView(add)
+                  val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }; box.addView(ScrollView(this).apply { addView(col) })
+                  val d = AlertDialog.Builder(this).setTitle("Open Pages (${tabs.size})").setView(box).setNegativeButton("Close", null).create()
+                  add.setOnClickListener { d.dismiss(); createTab(AppStorage.getHomeUrl(), true) }
+                  tabs.forEachIndexed { idx, t ->
+                      val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(8), dp(8), dp(8)); if (idx == activeIdx) setBackgroundColor(Color.parseColor("#222979FF")) }
+                      r.addView(TextView(this).apply { text = "${idx + 1}. ${t.title.take(35)}\n${t.url.take(45)}"; textSize = 13f; layoutParams = LinearLayout.LayoutParams(0, -2, 1f); setOnClickListener { switchTab(idx); d.dismiss() } })
+                      r.addView(Button(this).apply { text = "✕"; setOnClickListener { d.dismiss(); closeTab(idx) } })
+                      col.addView(r)
+                  }
+                  d.show()
+              }
+
+              private fun showBookmarksDialog() {
+                  val bms = AppStorage.getBookmarks(); val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(10), dp(14), dp(10)) }
+                  val d = AlertDialog.Builder(this).setTitle("Bookmarks (${bms.size})").setView(ScrollView(this).apply { addView(col) })
+                      .setPositiveButton("Add Current Page") { _, _ -> activeTab()?.let { AppStorage.addBookmark(it.title, it.url); updateStar(); Toast.makeText(this, "Saved!", Toast.LENGTH_SHORT).show() } }
+                      .setNegativeButton("Close", null).create()
+                  if (bms.isEmpty()) col.addView(TextView(this).apply { text = "No bookmarks yet." })
+                  bms.forEach { bm ->
+                      val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(6), dp(8), dp(6), dp(8)) }
+                      r.addView(TextView(this).apply { text = "★ ${bm.title}\n${bm.url.take(50)}"; textSize = 13f; layoutParams = LinearLayout.LayoutParams(0, -2, 1f); setOnClickListener { activeTab()?.webView?.loadUrl(bm.url); d.dismiss() } })
+                      r.addView(Button(this).apply { text = "🗑"; setOnClickListener { AppStorage.removeBookmark(bm.url); updateStar(); d.dismiss(); showBookmarksDialog() } })
+                      col.addView(r)
+                  }
+                  d.show()
+              }
+
+              private fun showMainMenu() {
+                  val dm = if (AppStorage.isDesktopMode()) "🖥 Desktop Mode: ON ✓" else "🖥 Desktop Mode: OFF"
+                  val tm = when (AppStorage.getThemeMode()) { 1 -> "☀ Theme: Day"; 2 -> "🌙 Theme: Night"; else -> "🌗 Theme: Auto" }
+                  AlertDialog.Builder(this).setTitle("Menu").setItems(arrayOf("★ Bookmarks", "☆ Add Bookmark", "➕ Add Page", dm, tm, "⬇ Downloader / Downloaded", "⚙ Settings")) { _, w ->
+                      when (w) {
+                          0 -> showBookmarksDialog()
+                          1 -> activeTab()?.let { AppStorage.addBookmark(it.title, it.url); updateStar(); Toast.makeText(this, "Bookmarked!", Toast.LENGTH_SHORT).show() }
+                          2 -> createTab(AppStorage.getHomeUrl(), true)
+                          3 -> toggleDesktop()
+                          4 -> showThemePicker()
+                          5 -> showDownloadsDialog(0)
+                          6 -> showSettings()
+                      }
+                  }.show()
+              }
+
+              private fun toggleDesktop() {
+                  val n = !AppStorage.isDesktopMode(); AppStorage.setDesktopMode(n)
+                  tabs.forEach { applyWvSettings(it.webView) }; activeTab()?.webView?.reload()
+                  Toast.makeText(this, if (n) "Desktop Mode ON" else "Mobile Mode ON", Toast.LENGTH_SHORT).show()
+              }
+              private fun showThemePicker() {
+                  AlertDialog.Builder(this).setTitle("Day / Night / Auto").setSingleChoiceItems(arrayOf("Auto", "Day Mode", "Night Mode"), AppStorage.getThemeMode()) { d, w ->
+                      AppStorage.setThemeMode(w); AppStorage.applySavedTheme(); d.dismiss()
+                  }.show()
+              }
+              private fun showSettings() {
+                  AlertDialog.Builder(this).setTitle("Settings").setItems(arrayOf("🌗 Theme: Day / Night / Auto", "🖥 Toggle Desktop Mode", "🏠 Set Home URL", "🔄 Update yt-dlp Engine", "🧹 Clear Cache & Cookies", "🗑 Clear Download History")) { _, w ->
+                      when (w) {
+                          0 -> showThemePicker()
+                          1 -> toggleDesktop()
+                          2 -> { val et = EditText(this).apply { setText(AppStorage.getHomeUrl()) }; AlertDialog.Builder(this).setTitle("Home URL").setView(et).setPositiveButton("Save") { _, _ -> AppStorage.setHomeUrl(et.text.toString()) }.setNegativeButton("Cancel", null).show() }
+                          3 -> {
+                              if (!engineReady) { Toast.makeText(this, "Wait...", Toast.LENGTH_SHORT).show(); return@setItems }
+                              val d = AlertDialog.Builder(this).setTitle("Updating yt-dlp...").setCancelable(false).show()
+                              Thread {
+                                  val msg = try { "Update: ${YoutubeDL.getInstance().updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)?.name ?: "DONE"}" } catch (e: Exception) { "Error: ${e.message}" }
+                                  handler.post { d.dismiss(); Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+                              }.start()
+                          }
+                          4 -> { activeTab()?.webView?.clearCache(true); CookieManager.getInstance().removeAllCookies(null); Toast.makeText(this, "Cleared", Toast.LENGTH_SHORT).show() }
+                          5 -> { AppStorage.clearAllHistory(); Toast.makeText(this, "History cleared", Toast.LENGTH_SHORT).show() }
+                      }
+                  }.show()
+              }
+
+              private fun fetchQualities(url: String, fallbackMedia: List<String> = emptyList()) {
+                  if (!ensurePerm()) return
+                  if (!engineReady) { Toast.makeText(this, "Engine loading, try in 3s...", Toast.LENGTH_SHORT).show(); return }
+                  val dlg = AlertDialog.Builder(this).setTitle("Checking Video Qualities...").setMessage("Getting Original & Lower qualities + MB...\n$url").setCancelable(true).show()
                   Thread {
                       try {
-                          YoutubeDL.getInstance().init(applicationContext)
-                          FFmpeg.getInstance().init(applicationContext)
-                          isInitialized = true
-                          runOnUiThread {
-                              btnVideo.isEnabled = true
-                              btnAudio.isEnabled = true
-                              btnUpdate.isEnabled = true
-                              statusText.text = "Ready! Paste link or Share from YouTube app.\n(First time 'Update yt-dlp Engine' click pannunga)"
-                          }
+                          val req = YoutubeDLRequest(url).apply { addOption("--dump-single-json"); addOption("--no-playlist"); addOption("--no-warnings") }
+                          val raw = JSONObject((YoutubeDL.getInstance().execute(req, "info_${System.currentTimeMillis()}") { _, _, _ -> }.out ?: "").trim())
+                          val vObj = if (raw.has("entries") && !raw.has("formats")) raw.optJSONArray("entries")?.let { if (it.length() > 0) it.getJSONObject(0) else raw } ?: raw else raw
+                          val title = vObj.optString("title", "Video").ifBlank { "Video" }
+                          val vk = vObj.optString("id", "").let { if (it.isNotBlank()) "${vObj.optString("extractor_key", "web")}:$it" else AppStorage.normalizeUrlKey(url) }
+                          val opts = parseQualities(vObj.optJSONArray("formats"), vObj.optDouble("duration", 0.0))
+                          handler.post { if (dlg.isShowing) dlg.dismiss(); if (opts.isEmpty()) fallbackQualities(url, title, fallbackMedia) else showQualityPicker(url, vk, title, opts) }
                       } catch (e: Exception) {
-                          runOnUiThread {
-                              statusText.text = "Init failed: ${e.message}"
+                          handler.post {
+                              if (dlg.isShowing) dlg.dismiss()
+                              if (fallbackMedia.isNotEmpty()) fallbackQualities(url, activeTab()?.title ?: "Video", fallbackMedia)
+                              else AlertDialog.Builder(this).setTitle("No Video Detected").setMessage("Video kidaikala. Video play aagura page open pannunga or Settings -> Update yt-dlp try pannunga.\n(${e.message?.take(100)})").setPositiveButton("OK", null).show()
                           }
                       }
                   }.start()
               }
 
-              private fun updateEngine() {
-                  if (!isInitialized || isBusy) return
-                  isBusy = true
-                  statusText.text = "Updating yt-dlp engine..."
+              private fun parseQualities(arr: JSONArray?, dur: Double): List<VideoQualityOption> {
+                  if (arr == null || arr.length() == 0) return emptyList()
+                  var audBytes = 0L; var audAbr = -1.0
+                  data class F(val id: String, val ext: String, val h: Int, val fps: Int, val tbr: Double, val vc: String, val ac: String, val note: String, val sz: Long)
+                  val all = mutableListOf<F>()
+                  for (i in 0 until arr.length()) {
+                      val o = arr.optJSONObject(i) ?: continue; val id = o.optString("format_id", ""); if (id.isEmpty()) continue
+                      val ext = o.optString("ext", "mp4"); val h = o.optInt("height", 0); val fps = o.optInt("fps", 0); val tbr = o.optDouble("tbr", 0.0); val abr = o.optDouble("abr", tbr)
+                      val vc = o.optString("vcodec", "none"); val ac = o.optString("acodec", "none"); val note = o.optString("format_note", "")
+                      var sz = o.optLong("filesize", 0L); if (sz <= 0L) sz = o.optLong("filesize_approx", 0L); if (sz <= 0L && tbr > 0 && dur > 0) sz = ((tbr * 1000.0 / 8.0) * dur).toLong()
+                      if (vc == "none" && ac != "none") { val s = if (ext == "m4a") abr + 50 else abr; if (s > audAbr) { audAbr = s; audBytes = sz } }
+                      all.add(F(id, ext, h, fps, tbr, vc, ac, note, sz))
+                  }
+                  val byH = LinkedHashMap<Int, F>()
+                  for (f in all) {
+                      if (f.vc == "none" || f.h <= 0) continue
+                      val sc = { r: F -> r.tbr + (if (r.ext == "mp4") 10000 else 0) + (if (r.vc.startsWith("avc")) 5000 else 0) + (if (r.ac != "none") 1000 else 0) }
+                      if (byH[f.h] == null || sc(f) > sc(byH[f.h]!!)) byH[f.h] = f
+                  }
+                  val out = mutableListOf<VideoQualityOption>()
+                  byH.keys.sortedDescending().forEachIndexed { idx, h ->
+                      val f = byH[h]!!; val merge = (f.ac == "none"); val bytes = if (merge && f.sz > 0 && audBytes > 0) f.sz + audBytes else f.sz; val orig = (idx == 0)
+                      out.add(VideoQualityOption("v_${h}p", "${h}p${if (f.fps > 30) " ${f.fps}fps" else ""}${if (orig) " [Original]" else ""}", "MP4 • ${formatSizeMb(bytes)}", f.id, "mp4", bytes, false, merge, orig))
+                  }
+                  if (out.isEmpty()) all.filter { it.vc != "none" || it.ext in listOf("mp4", "webm") }.forEachIndexed { i, f ->
+                      val l = f.note.ifBlank { "${f.ext.uppercase()} #${f.id}" }
+                      out.add(VideoQualityOption("raw_${f.id}", if (i == 0) "$l [Original]" else l, "${f.ext.uppercase()} • ${formatSizeMb(f.sz)}", f.id, f.ext, f.sz, false, f.ac == "none", i == 0))
+                  }
+                  out.add(VideoQualityOption("audio_m4a", "Audio Only (M4A)", "M4A • ${formatSizeMb(audBytes)}", "ba/b", "m4a", audBytes, true, false, false))
+                  out.add(VideoQualityOption("audio_mp3", "Audio Only (MP3)", "MP3 • ${formatSizeMb(audBytes)}", "ba/b", "mp3", audBytes, true, false, false))
+                  return out
+              }
+
+              private fun fallbackQualities(pageUrl: String, title: String, media: List<String>) {
+                  if (media.isEmpty()) { Toast.makeText(this, "No video streams found", Toast.LENGTH_LONG).show(); return }
                   Thread {
-                      try {
-                          val status = YoutubeDL.getInstance().updateYoutubeDL(
-                              applicationContext,
-                              YoutubeDL.UpdateChannel.NIGHTLY
-                          )
-                          runOnUiThread {
-                              statusText.text = "Engine update status: ${status?.name ?: "DONE"}"
-                          }
-                      } catch (e: Exception) {
-                          runOnUiThread {
-                              statusText.text = "Update error: ${e.message}"
-                          }
-                      } finally {
-                          isBusy = false
+                      val opts = media.mapIndexed { idx, mu ->
+                          val sz = try { (URL(mu).openConnection() as HttpURLConnection).run { requestMethod = "HEAD"; connectTimeout = 5000; readTimeout = 5000; val l = contentLengthLong; disconnect(); l } } catch (_: Exception) { -1L }
+                          val ext = if (mu.contains(".webm", true)) "webm" else "mp4"
+                          VideoQualityOption("direct_${mu.hashCode()}", if (idx == 0) "Stream #1 [Original]" else "Stream #${idx + 1}", "${ext.uppercase()} • ${formatSizeMb(sz)}", "best", ext, sz, false, false, idx == 0, if (mu.contains(".m3u8", true)) null else mu)
                       }
+                      handler.post { showQualityPicker(pageUrl, AppStorage.normalizeUrlKey(pageUrl), title, opts) }
                   }.start()
               }
 
-              private fun startDownload(isAudioOnly: Boolean) {
-                  if (!isInitialized || isBusy) return
-
-                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-                      checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
-                  ) {
-                      requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
-                      statusText.text = "Storage permission allow pannittu thirumba try pannunga."
-                      return
-                  }
-
-                  val url = urlInput.text.toString().trim()
-                  if (url.isEmpty()) {
-                      Toast.makeText(this, "Please enter a URL", Toast.LENGTH_SHORT).show()
-                      return
-                  }
-
-                  isBusy = true
-                  progressBar.progress = 0
-                  statusText.text = "Starting download..."
-
-                  Thread {
-                      val workDir = File(getExternalFilesDir(null), "ytdl_work")
-                      if (workDir.exists()) {
-                          workDir.listFiles()?.forEach { it.delete() }
-                      } else {
-                          workDir.mkdirs()
+              private fun showQualityPicker(pageUrl: String, vk: String, title: String, opts: List<VideoQualityOption>) {
+                  val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12)) }
+                  col.addView(TextView(this).apply { text = title; textSize = 14f; typeface = Typeface.DEFAULT_BOLD; maxLines = 2; ellipsize = TextUtils.TruncateAt.END; setPadding(0, 0, 0, dp(10)) })
+                  val d = AlertDialog.Builder(this).setTitle("Select Quality (MB)").setView(ScrollView(this).apply { addView(col) }).setNegativeButton("Close", null).create()
+                  val ck = CookieManager.getInstance().getCookie(pageUrl); val ua = activeTab()?.webView?.settings?.userAgentString ?: mobileUA
+                  opts.forEach { q ->
+                      val done = AppStorage.isQualityDownloaded(vk, q.id); val busy = DownloadCenter.isQualityDownloading(vk, q.id)
+                      val row = LinearLayout(this).apply {
+                          orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(11), dp(12), dp(11))
+                          background = GradientDrawable().apply { setColor(when { done -> Color.parseColor("#1A4CAF50"); q.isOriginal -> Color.parseColor("#1A2979FF"); else -> Color.parseColor("#10888888") }); cornerRadius = dp(10).toFloat() }
+                          layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
                       }
-
-                      try {
-                          val request = YoutubeDLRequest(url).apply {
-                              addOption("-o", "${workDir.absolutePath}/%(title).80s.%(ext)s")
-                              addOption("--no-playlist")
-                              addOption("--no-mtime")
-                              if (isAudioOnly) {
-                                  addOption("-x")
-                                  addOption("--audio-format", "m4a")
-                              } else {
-                                  addOption("-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b")
-                                  addOption("--merge-output-format", "mp4")
-                              }
-                          }
-
-                          YoutubeDL.getInstance().execute(request, null) { progress, etaInSeconds, line ->
-                              runOnUiThread {
-                                  if (progress >= 0f) {
-                                      progressBar.progress = progress.toInt()
-                                      statusText.text = "Downloading: ${progress.toInt()}% (ETA: ${etaInSeconds}s)\n$line"
-                                  } else if (line.isNotBlank()) {
-                                      statusText.text = line
-                                  }
-                              }
-                          }
-
-                          val downloadedFile = workDir.listFiles()?.firstOrNull {
-                              it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl")
-                          }
-
-                          if (downloadedFile == null) {
-                              runOnUiThread {
-                                  statusText.text = "Download mudinjadhu aana file kandupidikala."
-                              }
-                          } else {
-                              val savedName = saveToDownloads(downloadedFile)
-                              downloadedFile.delete()
-                              runOnUiThread {
-                                  progressBar.progress = 100
-                                  statusText.text = "Success! Saved in Downloads/YTDownloader:\n$savedName"
-                              }
-                          }
-                      } catch (e: Exception) {
-                          runOnUiThread {
-                              statusText.text = "Download failed:\n${e.message}"
-                          }
-                      } finally {
-                          isBusy = false
+                      val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+                      left.addView(TextView(this).apply { text = q.label; textSize = 14f; typeface = Typeface.DEFAULT_BOLD }); left.addView(TextView(this).apply { text = q.subLabel; textSize = 12f })
+                      val badge = TextView(this).apply {
+                          textSize = 13f; typeface = Typeface.DEFAULT_BOLD
+                          when { done -> { text = "✓✓ Downloaded"; setTextColor(Color.parseColor("#2E7D32")) }; busy -> { text = "⏳ Downloading"; setTextColor(Color.parseColor("#EF6C00")) }; else -> { text = "⬇ Download"; setTextColor(Color.parseColor("#2979FF")) } }
                       }
-                  }.start()
-              }
-
-              private fun saveToDownloads(sourceFile: File): String {
-                  val ext = sourceFile.extension.lowercase()
-                  val mimeType = when (ext) {
-                      "mp4" -> "video/mp4"
-                      "m4a" -> "audio/mp4"
-                      "mp3" -> "audio/mpeg"
-                      "webm" -> "video/webm"
-                      else -> "application/octet-stream"
-                  }
-
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                      val values = ContentValues().apply {
-                          put(MediaStore.Downloads.DISPLAY_NAME, sourceFile.name)
-                          put(MediaStore.Downloads.MIME_TYPE, mimeType)
-                          put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/YTDownloader")
-                          put(MediaStore.Downloads.IS_PENDING, 1)
-                      }
-                      val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                          ?: throw RuntimeException("MediaStore insert failed")
-
-                      contentResolver.openOutputStream(uri)?.use { out ->
-                          FileInputStream(sourceFile).use { input ->
-                              input.copyTo(out)
-                          }
-                      }
-                      values.clear()
-                      values.put(MediaStore.Downloads.IS_PENDING, 0)
-                      contentResolver.update(uri, values, null, null)
-                  } else {
-                      val dir = File(
-                          Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                          "YTDownloader"
-                      )
-                      if (!dir.exists()) dir.mkdirs()
-                      val dest = File(dir, sourceFile.name)
-                      FileInputStream(sourceFile).use { input ->
-                          FileOutputStream(dest).use { out ->
-                              input.copyTo(out)
-                          }
-                      }
-                  }
-                  return sourceFile.name
-              }
-          }
-          EOF
-
-      - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: YTDownloader-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+                      row.addView(left); row.addView(badge)
+                      row.setOnClickListener {
