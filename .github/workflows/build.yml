@@ -734,6 +734,38 @@ jobs:
                   return sanitizeName(Uri.decode(base).replace('_', ' ').replace('-', ' ')).ifEmpty { "Folder" }
               }
 
+              private fun dirSignature(u: String): String {
+                  val uri = Uri.parse(u)
+                  val qDir = uri.getQueryParameter("dir") ?: uri.getQueryParameter("folder")
+                      ?: uri.getQueryParameter("path") ?: uri.getQueryParameter("album")
+                  if (!qDir.isNullOrEmpty()) return Uri.decode(qDir).trim('/').lowercase(Locale.US)
+                  return Uri.decode(uri.path ?: "").trim('/').lowercase(Locale.US)
+              }
+
+              private fun isChildPath(childUrl: String, baseUrl: String): Boolean {
+                  val c = dirSignature(childUrl)
+                  val b = dirSignature(baseUrl)
+                  return b.isNotEmpty() && c.length > b.length && c.startsWith("$b/")
+              }
+
+              private fun isParentUrl(candidateUrl: String, baseUrl: String): Boolean {
+                  val c = dirSignature(candidateUrl)
+                  val b = dirSignature(baseUrl)
+                  if (c.isEmpty() && b.isNotEmpty()) return true
+                  return b.isNotEmpty() && c.length < b.length && b.startsWith("$c/")
+              }
+
+              private fun isLikelyChildFolder(a: Element, href: String, baseUrl: String): Boolean {
+                  if (isChildPath(href, baseUrl)) return true
+                  val box = a.closest("tr, li, div") ?: a
+                  val imgs = if (box.select("a").size <= 2) box.select("img") else a.select("img")
+                  for (img in imgs) {
+                      val h = (img.attr("src") + " " + img.attr("alt") + " " + img.attr("title")).lowercase(Locale.US)
+                      if (h.contains("folder") || h.contains("dir")) return true
+                  }
+                  return false
+              }
+
               // ---------- orientation & landscape scroll bars ----------
 
               private fun applyOrientation() {
@@ -862,7 +894,7 @@ jobs:
                     function isDlHref(h) {
                       if (!h) return false;
                       var l = h.toLowerCase();
-                      return isAudioHref(h) || l.indexOf('download') >= 0 || l.indexOf('dl=') >= 0 || l.indexOf('file=') >= 0 || l.indexOf('get') >= 0;
+                      return isAudioHref(h) || l.indexOf('download') >= 0 || l.indexOf('dl=') >= 0 || l.indexOf('file=') >= 0 || l.indexOf('/dl/') >= 0;
                     }
                     function isPlayElem(el) {
                       if (!el) return false;
@@ -876,6 +908,9 @@ jobs:
                       if (/^(play|dl|download|save|add|mp3|song|track|audio|listen)$/.test(l)) return true;
                       if (/^[0-9]+(\.[0-9]+)?\s*(mb|kb|gb|kbps)?$/.test(l)) return true;
                       return false;
+                    }
+                    function normKey(s) {
+                      return (s || '').toLowerCase().replace(/\.[a-z0-9]{2,4}$/, '').replace(/[^a-z0-9]/g, '');
                     }
                     function rowTitle(row, skipA) {
                       if (!row) return '';
@@ -929,25 +964,66 @@ jobs:
                       }
                       return '';
                     }
-                    document.addEventListener('touchstart', function(e) {
-                      var a = e.target && e.target.closest ? e.target.closest('a') : null;
-                      if (a && a.href) {
-                        window.__abhLastUrl = a.href;
-                        window.__abhLastText = (a.innerText || a.textContent || a.title || '').trim();
-                      } else {
-                        window.__abhLastUrl = '';
-                        window.__abhLastText = '';
+                    function findUrlInEl(el) {
+                      if (!el) return '';
+                      var a = el.closest ? el.closest('a[href]') : null;
+                      if (a && a.href && a.href.indexOf('http') === 0) return a.href;
+                      var oc = el.getAttribute ? (el.getAttribute('onclick') || '') : '';
+                      if (!oc && el.parentElement) oc = el.parentElement.getAttribute('onclick') || '';
+                      var m = oc.match(/['"]((?:https?:\/\/|\/|\?)[^'"]+)['"]/);
+                      if (m) {
+                        try { return new URL(m[1], location.href).href; } catch(e) {}
                       }
+                      return '';
+                    }
+                    function findAudioOnPageByTitle(title) {
+                      var key = normKey(title);
+                      if (!key || key.length < 3) return '';
+                      var as = document.querySelectorAll('a[href]');
+                      for (var i = 0; i < as.length; i++) {
+                        var h = as[i].href;
+                        if (!isAudioHref(h)) continue;
+                        var seg = decodeURIComponent(h.split('#')[0].split('?')[0].split('/').pop() || '');
+                        var fk = normKey(seg);
+                        if (fk && (fk === key || fk.indexOf(key) >= 0 || key.indexOf(fk) >= 0)) return h;
+                      }
+                      var re = /['"]([^'"\s<>]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"\s<>]*)?)['"]/ig;
+                      var scripts = document.scripts;
+                      for (var s = 0; s < scripts.length; s++) {
+                        var txt = scripts[s].textContent || '';
+                        if (txt.length > 300000) continue;
+                        re.lastIndex = 0;
+                        var m;
+                        while ((m = re.exec(txt)) !== null) {
+                          var raw = m[1];
+                          var seg2 = decodeURIComponent(raw.split('#')[0].split('?')[0].split('/').pop() || '');
+                          var fk2 = normKey(seg2);
+                          if (fk2 && (fk2 === key || fk2.indexOf(key) >= 0 || key.indexOf(fk2) >= 0)) {
+                            try { return new URL(raw, location.href).href; } catch(e) {}
+                          }
+                        }
+                      }
+                      return '';
+                    }
+                    document.addEventListener('touchstart', function(e) {
+                      var t = e.target;
+                      var a = t && t.closest ? t.closest('a') : null;
+                      var row = t && t.closest ? t.closest('tr, li, div') : null;
+                      var u = (a && a.href && a.href.indexOf('http') === 0) ? a.href : findUrlInEl(t);
+                      var txt = a ? (a.innerText || a.textContent || a.title || '').trim() : '';
+                      if (isJunkTxt(txt) && row) txt = rowTitle(row, null);
+                      window.__abhLastUrl = u || '';
+                      window.__abhLastText = txt || '';
                     }, true);
                     document.addEventListener('click', function(e) {
                       var t = e.target;
                       if (!t || !t.closest) return;
-                      if (isPlayElem(t)) return;
                       var a = t.closest('a');
-                      if (a && isPlayElem(a)) return;
+                      var row = (a ? a.closest('tr, li, div') : t.closest('tr, li, div'));
+                      var dlSibInRow = row ? findRowDlLink(row, a) : null;
+                      if (dlSibInRow && (isPlayElem(t) || (a && isPlayElem(a)))) return;
                       if (a && a.href) {
                         var txt = (a.innerText || a.textContent || a.title || '').trim();
-                        var row = a.closest('tr, li');
                         var rowName = !isJunkTxt(txt) ? txt : rowTitle(row, a);
                         if (isAudioHref(a.href)) {
                           e.preventDefault();
@@ -955,46 +1031,53 @@ jobs:
                           ABH.onAudioLink(a.href, rowName);
                           return;
                         }
-                        if (row && row.querySelectorAll('a').length <= 6) {
-                          var embedded = findMp3InAttr(a) || findMp3InAttr(t);
-                          if (embedded) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            ABH.onAudioLink(embedded, rowName);
-                            return;
-                          }
-                          var hrefL = (a.getAttribute('href') || '').trim().toLowerCase();
-                          var isScriptOrHash = !hrefL || hrefL === '#' || hrefL.indexOf('javascript:') === 0 || hrefL.indexOf('play') >= 0;
-                          var dlSib = findRowDlLink(row, a);
-                          if (dlSib && (isScriptOrHash || row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSib.href))) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            ABH.onAudioLink(dlSib.href, rowName);
-                            return;
-                          }
-                          if (rowName) ABH.setPendingName(rowName);
-                        } else if (!isJunkTxt(txt)) {
-                          ABH.setPendingName(txt);
+                        var embedded = findMp3InAttr(a) || findMp3InAttr(t);
+                        if (embedded) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          ABH.onAudioLink(embedded, rowName);
+                          return;
                         }
+                        var hrefL = (a.getAttribute('href') || '').trim().toLowerCase();
+                        var isScriptOrHash = !hrefL || hrefL === '#' || hrefL.indexOf('javascript:') === 0 || hrefL.indexOf('play') >= 0;
+                        if (dlSibInRow && (isScriptOrHash || row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSibInRow.href))) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          ABH.onAudioLink(dlSibInRow.href, rowName);
+                          return;
+                        }
+                        if (isScriptOrHash && !isJunkTxt(rowName)) {
+                          var matched = findAudioOnPageByTitle(rowName);
+                          if (matched) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            ABH.onAudioLink(matched, rowName);
+                            return;
+                          }
+                        }
+                        if (rowName) ABH.setPendingName(rowName);
                       } else {
-                        var mp3 = findMp3InAttr(t);
-                        var row2 = t.closest('tr, li');
+                        var mp3 = findMp3InAttr(t) || (row ? findMp3InAttr(row) : '');
                         if (mp3) {
                           e.preventDefault();
                           e.stopPropagation();
                           var name2 = (t.innerText || t.textContent || '').trim();
-                          ABH.onAudioLink(mp3, !isJunkTxt(name2) ? name2 : rowTitle(row2, null));
+                          ABH.onAudioLink(mp3, !isJunkTxt(name2) ? name2 : rowTitle(row, null));
                           return;
                         }
-                        if (row2) {
-                          var clickedTxt = (t.innerText || t.textContent || '').trim();
-                          if (!isJunkTxt(clickedTxt)) {
-                            var dlSib2 = findRowDlLink(row2, null);
-                            if (dlSib2 && (row2.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSib2.href))) {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              ABH.onAudioLink(dlSib2.href, rowTitle(row2, null) || clickedTxt);
-                            }
+                        var clickedTxt = (t.innerText || t.textContent || '').trim();
+                        if (!isJunkTxt(clickedTxt)) {
+                          if (dlSibInRow && (row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSibInRow.href))) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            ABH.onAudioLink(dlSibInRow.href, rowTitle(row, null) || clickedTxt);
+                            return;
+                          }
+                          var matched2 = findAudioOnPageByTitle(clickedTxt);
+                          if (matched2) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            ABH.onAudioLink(matched2, clickedTxt);
                           }
                         }
                       }
@@ -1103,21 +1186,22 @@ jobs:
                       if (vid.isNotEmpty()) {
                           longPressVideo("https://www.youtube.com/watch?v=" + vid)
                           true
-                      } else if (ex != null && (ex.startsWith("http://") || ex.startsWith("https://")) &&
-                          (t == WebView.HitTestResult.SRC_ANCHOR_TYPE || t == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE)
-                      ) {
+                      } else {
                           val infoJs = "(function(){var as=document.querySelectorAll('a[href]');var ls=[];" +
                               "for(var i=0;i<as.length;i++){var h=as[i].href;if(h&&h.indexOf('http')===0)ls.push(h.split('#')[0]);}" +
                               "return JSON.stringify({t:window.__abhLastText||'',u:window.__abhLastUrl||'',links:ls});})();"
                           val pageUrl = w.url ?: ""
+                          val hitUrl = if (ex != null && (ex.startsWith("http://") || ex.startsWith("https://"))) ex else ""
                           w.evaluateJavascript(infoJs) { raw ->
                               var linkText = ""
+                              var jsUrl = ""
                               val pageLinks = HashSet<String>()
                               try {
                                   val jsStr = JSONTokener(raw).nextValue() as? String
                                   if (!jsStr.isNullOrEmpty()) {
                                       val o = JSONObject(jsStr)
-                                      if (o.optString("u").isEmpty() || normUrl(o.optString("u")) == normUrl(ex)) {
+                                      jsUrl = o.optString("u", "")
+                                      if (hitUrl.isEmpty() || jsUrl.isEmpty() || normUrl(jsUrl) == normUrl(hitUrl)) {
                                           linkText = o.optString("t", "")
                                       }
                                       val arr = o.optJSONArray("links")
@@ -1126,11 +1210,12 @@ jobs:
                                       }
                                   }
                               } catch (e: Exception) { }
-                              handleLongPressLink(ex, linkText, pageUrl, pageLinks, pf)
+                              val targetUrl = hitUrl.ifEmpty { if (jsUrl.startsWith("http")) jsUrl else "" }
+                              if (targetUrl.isNotEmpty()) {
+                                  handleLongPressLink(targetUrl, linkText, pageUrl, pageLinks, pf)
+                              }
                           }
-                          true
-                      } else {
-                          false
+                          hitUrl.isNotEmpty()
                       }
                   }
                   w.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
@@ -1457,19 +1542,22 @@ jobs:
                               wait.dismiss()
                               if (res.audios.isEmpty() && res.folders.isEmpty()) {
                                   toast("No MP3 files or subfolders found in $cleanName")
-                              } else if (res.audios.isNotEmpty()) {
+                              } else if (res.folders.isNotEmpty()) {
+                                  val msg = StringBuilder("$cleanName (")
+                                  if (res.audios.isNotEmpty()) msg.append("${res.audios.size} songs, ")
+                                  msg.append("${res.folders.size} folders) - Download all?")
                                   dlg().setTitle(cleanName)
-                                      .setMessage("$cleanName (${res.audios.size} songs) - Download all?")
+                                      .setMessage(msg.toString())
                                       .setPositiveButton("Download all") { _, _ ->
-                                          enqueueAudioList(res.audios, cleanName, finalUrl, ua, profile, true)
+                                          startFolderBatch(cleanName, finalUrl, res, ignore, ua, profile)
                                       }
                                       .setNegativeButton("Cancel", null)
                                       .show()
                               } else {
                                   dlg().setTitle(cleanName)
-                                      .setMessage("$cleanName (${res.folders.size} folders) - Download all?")
+                                      .setMessage("$cleanName (${res.audios.size} songs) - Download all?")
                                       .setPositiveButton("Download all") { _, _ ->
-                                          startFolderBatch(cleanName, finalUrl, res, ignore, ua, profile)
+                                          enqueueAudioList(res.audios, cleanName, finalUrl, ua, profile, true)
                                       }
                                       .setNegativeButton("Cancel", null)
                                       .show()
@@ -1609,22 +1697,34 @@ jobs:
                       }
                   }
 
-                  // If this folder already contains songs directly, treat it as a song folder (do not crawl sidebar folders)
-                  if (audios.isNotEmpty()) {
-                      return ScanResult(audios, emptyList())
+                  // 5. Inline <script> playlists (e.g. jPlayer Jukebox)
+                  val scriptMp3Re = Regex("['\"]([^'\"\\s<>]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"\\s<>]*)?)['\"]", RegexOption.IGNORE_CASE)
+                  for (sc in doc.select("script")) {
+                      val st = sc.data()
+                      if (st.isEmpty() || st.length > 300000) continue
+                      for (m in scriptMp3Re.findAll(st)) {
+                          val raw = m.groupValues[1]
+                          try {
+                              val abs = URL(URL(baseUrl), raw).toString()
+                              addAudio(abs, "", null)
+                          } catch (e: Exception) { }
+                      }
                   }
 
-                  // 5. Subfolder links (exclude nav/header/footer, template/sidebar links, utility links, images/assets)
+                  // 6. Subfolder links (if songs exist on this page, only keep strict child folders / folder-icon links)
                   val folders = mutableListOf<FoundLink>()
                   val seenFolders = HashSet<String>()
+                  val hasAudios = audios.isNotEmpty()
                   for (a in doc.select("a[href]")) {
                       if (a.closest("header, nav, footer") != null) continue
                       val h = a.absUrl("href").substringBefore('#').trim()
                       if (!h.startsWith("http") || !sameHost(h, baseUrl)) continue
                       val ext = urlExt(h)
                       if (ext in AUDIO_EXTS || ext in SKIP_EXTS) continue
+                      if (isParentUrl(h, baseUrl)) continue
                       val nu = normUrl(h)
                       if (nu in ignoreUrls || nu in seenAudio || nu in seenFolders) continue
+                      if (hasAudios && !isLikelyChildFolder(a, h, baseUrl)) continue
                       val label = sanitizeName(
                           a.text().trim()
                               .ifEmpty { a.attr("title").trim() }
@@ -1655,8 +1755,11 @@ jobs:
                   toast("Scanning ${firstRes.folders.size} folders & starting downloads...")
                   dlTab = 0
                   flyToDownload()
+                  if (firstRes.audios.isNotEmpty()) {
+                      enqueueAudioList(firstRes.audios, rootFolder, rootUrl, ua, profile, false)
+                  }
                   Thread {
-                      var queuedSongs = 0
+                      var queuedSongs = firstRes.audios.size
                       var scannedCount = 0
                       val visited = HashSet<String>(templateLinks)
                       visited.add(normUrl(rootUrl))
@@ -1685,7 +1788,8 @@ jobs:
                                           enqueueAudioList(uniqueAudios, folderPath, subFinal, ua, profile, false)
                                       }
                                   }
-                              } else if (subRes.folders.isNotEmpty()) {
+                              }
+                              if (subRes.folders.isNotEmpty()) {
                                   val depth = folderPath.count { it == '/' }
                                   if (depth < 2) {
                                       for (sub2 in subRes.folders) {
@@ -2683,6 +2787,8 @@ jobs:
                       c.connectTimeout = 20000
                       c.readTimeout = 30000
                       c.setRequestProperty("User-Agent", ua ?: MOBILE_UA)
+                      c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                      c.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
                       if (referer.isNotEmpty()) c.setRequestProperty("Referer", referer)
                       val ck = cookiesFor(profile).getCookie(url)
                       if (ck != null) c.setRequestProperty("Cookie", ck)
