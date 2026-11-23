@@ -2495,4 +2495,384 @@ jobs:
                   expectAudio: Boolean
               ) {
                   val cleanTitle = sanitizeName(titleHint)
-                  val rawName = URLUtil.guessFileName
+                  val rawName = URLUtil.guessFileName(url, null, if (expectAudio) "audio/mpeg" else null)
+                  val ext = urlExt(url).let { if (it in AUDIO_EXTS) ".$it" else if (expectAudio) ".mp3" else "" }
+                  val useCustom = cleanTitle.isNotEmpty()
+                  val finalName = if (useCustom) {
+                      val e = ext.ifEmpty { "." + rawName.substringAfterLast('.', "mp3") }
+                      cleanTitle + e
+                  } else {
+                      rawName
+                  }
+                  val d = DlItem(if (useCustom) cleanTitle else rawName.substringBeforeLast("."), 0, 0, null, null, "")
+                  d.kind = 1
+                  d.link = url
+                  d.page = page
+                  d.profile = profile
+                  d.ua = if (desktop) DESKTOP_UA else null
+                  d.name = finalName
+                  d.folder = sanitizeFolder(folderPath)
+                  d.customName = useCustom
+                  d.expectAudio = expectAudio
+                  items.add(0, d)
+                  dlTab = 0
+                  flyToDownload()
+                  toast("Downloading " + finalName)
+                  startRun(d)
+              }
+
+              private fun startDirect(url: String, ua: String?, cd: String?, mimeHint: String?, page: String, profile: String) {
+                  val guessed = URLUtil.guessFileName(url, cd, mimeHint)
+                  val hintFresh = System.currentTimeMillis() - pendingClickTime < 5000
+                  val cleanHint = if (hintFresh) sanitizeName(pendingClickName) else ""
+                  val isAudio = isAudioUrl(url) || (mimeHint?.lowercase()?.startsWith("audio/") == true) ||
+                      urlExt(guessed) in AUDIO_EXTS
+                  val useCustom = isAudio && cleanHint.isNotEmpty()
+                  val ext = urlExt(url).let { if (it in AUDIO_EXTS) ".$it" else "." + guessed.substringAfterLast('.', "mp3") }
+                  val finalName = if (useCustom) cleanHint + ext else guessed
+                  val d = DlItem(if (useCustom) cleanHint else guessed.substringBeforeLast("."), 0, 0, null, null, "")
+                  d.kind = 1
+                  d.link = url
+                  d.page = page
+                  d.profile = profile
+                  d.ua = ua
+                  d.name = finalName
+                  d.customName = useCustom
+                  d.expectAudio = isAudio
+                  items.add(0, d)
+                  dlTab = 0
+                  flyToDownload()
+                  toast("Downloading " + finalName)
+                  startRun(d)
+              }
+
+              private fun openFollow(
+                  start: String,
+                  ua: String?,
+                  offset: Long,
+                  profile: String,
+                  referer: String = ""
+              ): HttpURLConnection {
+                  var url = start
+                  for (hop in 0..10) {
+                      val c = URL(url).openConnection() as HttpURLConnection
+                      c.instanceFollowRedirects = false
+                      c.connectTimeout = 20000
+                      c.readTimeout = 30000
+                      if (ua != null) c.setRequestProperty("User-Agent", ua)
+                      if (referer.isNotEmpty()) c.setRequestProperty("Referer", referer)
+                      val ck = cookiesFor(profile).getCookie(url)
+                      if (ck != null) c.setRequestProperty("Cookie", ck)
+                      if (offset > 0) c.setRequestProperty("Range", "bytes=" + offset + "-")
+                      val code = c.responseCode
+                      if (code in 300..399) {
+                          val loc = c.getHeaderField("Location") ?: throw Exception("Bad redirect")
+                          url = URL(URL(url), loc).toString()
+                          c.disconnect()
+                          continue
+                      }
+                      if (code !in 200..299) {
+                          c.disconnect()
+                          throw Exception("Server returned HTTP " + code)
+                      }
+                      return c
+                  }
+                  throw Exception("Too many redirects")
+              }
+
+              private fun audioExtFromMeta(cd: String?, url: String, ct: String): String {
+                  val cdName = if (!cd.isNullOrEmpty()) URLUtil.guessFileName(url, cd, null) else ""
+                  val e1 = urlExt(cdName)
+                  if (e1 in AUDIO_EXTS) return ".$e1"
+                  val e2 = urlExt(url)
+                  if (e2 in AUDIO_EXTS) return ".$e2"
+                  return when {
+                      ct.contains("flac") -> ".flac"
+                      ct.contains("mp4") || ct.contains("aac") || ct.contains("m4a") -> ".m4a"
+                      ct.contains("ogg") -> ".ogg"
+                      ct.contains("wav") -> ".wav"
+                      else -> ".mp3"
+                  }
+              }
+
+              private fun runDirect(d: DlItem, g: Int) {
+                  if (d.stop != 0 || d.gen != g) return
+                  d.state = 1
+                  runOnUiThread { refreshDl() }
+                  val dir = File(filesDir, "parts/" + d.id)
+                  try {
+                      dir.mkdirs()
+                      val tmpFile = File(dir, "part.bin")
+                      var offset = if (tmpFile.exists()) tmpFile.length() else 0L
+                      var conn = openFollow(d.link, d.ua, offset, d.profile, d.page)
+                      var ct = (conn.contentType ?: "").lowercase(Locale.US)
+                      if (d.expectAudio && ct.contains("text/html")) {
+                          val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().take(200000) }
+                          val base = conn.url.toString()
+                          conn.disconnect()
+                          val doc = Jsoup.parse(html, base)
+                          var redir = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
+                              ?.substringAfter("url=", "")?.trim('"', '\'', ' ') ?: ""
+                          if (redir.isEmpty()) {
+                              redir = doc.select("a[href], source[src], audio[src]")
+                                  .map { it.absUrl(if (it.hasAttr("href")) "href" else "src") }
+                                  .firstOrNull { isAudioUrl(it) } ?: ""
+                          }
+                          if (redir.isEmpty()) throw Exception("Server returned webpage instead of MP3")
+                          val resolved = URL(URL(base), redir).toString()
+                          offset = 0L
+                          conn = openFollow(resolved, d.ua, 0L, d.profile, base)
+                          ct = (conn.contentType ?: "").lowercase(Locale.US)
+                          if (ct.contains("text/html")) {
+                              conn.disconnect()
+                              throw Exception("Server returned webpage instead of MP3")
+                          }
+                      }
+                      if (offset == 0L && d.customName) {
+                          val ext = audioExtFromMeta(conn.getHeaderField("Content-Disposition"), conn.url.toString(), ct)
+                          d.name = sanitizeName(d.title).ifEmpty { "Track" } + ext
+                      }
+                      val append = offset > 0 && conn.responseCode == 206
+                      if (!append) offset = 0L
+                      val len = conn.contentLengthLong
+                      if (len > 0) d.total = offset + len
+                      var done = offset
+                      var completed = false
+                      conn.inputStream.use { ins ->
+                          FileOutputStream(tmpFile, append).use { out ->
+                              val buf = ByteArray(65536)
+                              while (true) {
+                                  val n = ins.read(buf)
+                                  if (n < 0) { completed = true; break }
+                                  if (d.stop != 0 || d.gen != g) break
+                                  out.write(buf, 0, n)
+                                  done += n
+                                  d.done = done
+                                  if (d.total > 0) d.progress = (done * 100 / d.total).toInt().coerceIn(0, 100)
+                                  ui()
+                              }
+                          }
+                      }
+                      conn.disconnect()
+                      if (completed) {
+                          if (d.gen != g) return
+                          val finalFile = File(dir, sanitizeName(d.name).ifEmpty { "download.bin" })
+                          if (finalFile.exists()) finalFile.delete()
+                          if (!tmpFile.renameTo(finalFile)) {
+                              tmpFile.copyTo(finalFile, overwrite = true)
+                              tmpFile.delete()
+                          }
+                          saveFile(d, finalFile)
+                          d.total = finalFile.length()
+                          d.done = d.total
+                          if (!d.customName) d.title = finalFile.nameWithoutExtension
+                          d.state = 2
+                          d.progress = 100
+                          if (d.folder.isEmpty()) runOnUiThread { toast("Downloaded: " + d.title) }
+                      } else if (d.gen == g && d.stop == 1) {
+                          d.state = 4
+                      }
+                  } catch (e: Exception) {
+                      if (d.gen == g) {
+                          if (d.stop == 1) {
+                              d.state = 4
+                          } else if (d.stop != 2) {
+                              d.state = 3
+                              d.msg = (e.message ?: "Unknown error").take(300)
+                          }
+                      }
+                  } finally {
+                      if (d.state == 2 || d.stop == 2) dir.deleteRecursively()
+                      runOnUiThread { finishItem(d) }
+                  }
+              }
+
+              private fun openFile(d: DlItem) {
+                  try {
+                      val i = Intent(Intent.ACTION_VIEW)
+                      i.setDataAndType(Uri.parse(d.uri), d.mime ?: "*/*")
+                      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      startActivity(i)
+                  } catch (e: Exception) {
+                      toast("No app found to open this file")
+                  }
+              }
+
+              private fun saveItems() {
+                  val a = JSONArray()
+                  for (d in items) {
+                      val st = if (d.state == 0 || d.state == 1) 4 else d.state
+                      a.put(
+                          JSONObject().put("t", d.title).put("s", st).put("u", d.uri ?: "").put("m", d.mime ?: "")
+                              .put("g", d.msg).put("n", d.name).put("i", d.id).put("k", d.kind).put("l", d.link)
+                              .put("p", d.page).put("a", d.audio).put("f", d.fmt).put("ua", d.ua ?: "")
+                              .put("z", d.total).put("d", d.done).put("r", d.progress)
+                              .put("v", d.vid).put("q", d.qkey).put("tg", d.qtag).put("pf", d.profile)
+                              .put("fd", d.folder).put("cn", d.customName).put("ea", d.expectAudio)
+                      )
+                  }
+                  prefs.edit().putString("dl", a.toString()).apply()
+              }
+
+              private fun loadItems() {
+                  try {
+                      val a = JSONArray(prefs.getString("dl", "[]"))
+                      for (i in 0 until a.length()) {
+                          val o = a.getJSONObject(i)
+                          var st = o.getInt("s")
+                          if (st == 0 || st == 1) st = 4
+                          val it2 = DlItem(o.getString("t"), st, o.optInt("r", 100), o.optString("u"), o.optString("m"), o.optString("g"))
+                          it2.name = o.optString("n")
+                          val id = o.optString("i")
+                          if (id.isNotEmpty()) it2.id = id
+                          it2.kind = o.optInt("k", 0)
+                          it2.link = o.optString("l")
+                          it2.page = o.optString("p")
+                          it2.audio = o.optBoolean("a", false)
+                          it2.fmt = o.optString("f", "bv*+ba/b")
+                          val ua = o.optString("ua")
+                          it2.ua = if (ua.isEmpty()) null else ua
+                          it2.total = o.optLong("z", 0L)
+                          it2.done = o.optLong("d", 0L)
+                          it2.vid = o.optString("v")
+                          it2.qkey = o.optString("q")
+                          it2.qtag = o.optString("tg")
+                          it2.profile = o.optString("pf")
+                          it2.folder = o.optString("fd")
+                          it2.customName = o.optBoolean("cn", false)
+                          it2.expectAudio = o.optBoolean("ea", false)
+                          items.add(it2)
+                      }
+                  } catch (e: Exception) { }
+              }
+
+              private fun updateEngine(manual: Boolean) {
+                  try {
+                      val r = YoutubeDL.getInstance().updateYoutubeDL(application, YoutubeDL.UpdateChannel.NIGHTLY)
+                      if (manual) runOnUiThread { toast("Engine update: $r") }
+                  } catch (e: Exception) {
+                      if (manual) runOnUiThread { toast("Update failed: ${e.message}") }
+                  }
+              }
+
+              private fun progressText(d: DlItem): String {
+                  if (d.kind == 1) {
+                      return if (d.total > 0) fmtSize(d.done) + " / " + fmtSize(d.total) + " (" + d.progress + "%)" else fmtSize(d.done)
+                  }
+                  var s = d.progress.toString() + "%"
+                  if (d.sizeLabel.isNotEmpty()) s += " of " + d.sizeLabel
+                  if (d.total > 0) s += "  (total ~" + fmtSize(d.total) + ")"
+                  return s
+              }
+
+              private fun statusText(d: DlItem): String = when (d.state) {
+                  0 -> "Waiting..."
+                  1 -> "Downloading - " + progressText(d)
+                  4 -> "Paused - " + progressText(d)
+                  2 -> "Downloaded" + (if (d.total > 0) " - " + fmtSize(d.total) else "") + " - tap to open"
+                  else -> "Failed: " + d.msg
+              }
+
+              private fun act(label: String, color: Int = 0xFF2D7FF9.toInt(), f: () -> Unit): TextView {
+                  val t = TextView(this)
+                  t.text = label
+                  t.textSize = 14f
+                  t.setTextColor(color)
+                  t.setPadding(0, dp(10), dp(24), dp(4))
+                  t.isFocusable = false
+                  t.setOnClickListener { f() }
+                  return t
+              }
+
+              inner class DlAdapter : BaseAdapter() {
+                  override fun getCount() = shown().size
+                  override fun getItem(position: Int): Any = shown()[position]
+                  override fun getItemId(position: Int) = position.toLong()
+                  override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                      val d = shown()[position]
+                      val box = LinearLayout(this@MainActivity)
+                      box.orientation = LinearLayout.VERTICAL
+                      box.setPadding(dp(16), dp(12), dp(16), dp(8))
+                      val t = TextView(this@MainActivity)
+                      t.text = d.title
+                      t.textSize = 16f
+                      t.maxLines = 2
+                      t.setTextColor(col.text)
+                      val s = TextView(this@MainActivity)
+                      s.text = (if (d.folder.isNotEmpty()) d.folder + "\n" else "") + statusText(d)
+                      s.textSize = 13f
+                      s.setTextColor(col.sec)
+                      box.addView(t)
+                      box.addView(s)
+                      if (d.state == 0 || d.state == 1 || d.state == 4) {
+                          val pb = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal)
+                          pb.max = 100
+                          pb.progress = d.progress
+                          box.addView(pb)
+                      }
+                      val row = LinearLayout(this@MainActivity)
+                      row.orientation = LinearLayout.HORIZONTAL
+                      when (d.state) {
+                          0, 1 -> row.addView(act("Pause") { pauseItem(d) })
+                          4 -> row.addView(act("Resume") { startRun(d) })
+                          3 -> row.addView(act("Retry") { startRun(d) })
+                      }
+                      row.addView(act("Open page") { openPage(d) })
+                      row.addView(act("Delete", 0xFFE5534B.toInt()) { askDelete(d) })
+                      box.addView(row)
+                      return box
+                  }
+              }
+          }
+          EOF_FILE
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/ic_launcher_foreground.xml <<'EOF_FILE'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+          <path android:fillColor="#1F5FBF" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
+          <path android:fillColor="#3DA24A" android:pathData="M32,38C36,32 44,32 46,38C48,44 42,48 44,54C40,58 34,54 32,48z"/>
+          <path android:fillColor="#3DA24A" android:pathData="M60,36C66,32 76,36 76,44C76,50 70,52 68,58C64,56 62,50 60,46z"/>
+          <path android:fillColor="#3DA24A" android:pathData="M44,68C50,64 58,66 62,72C58,78 50,80 44,74z"/>
+          <path android:strokeColor="#66FFFFFF" android:strokeWidth="0.8" android:pathData="M54,22C40,34 40,74 54,86C68,74 68,34 54,22M22,54H86M27,40H81M27,68H81"/>
+          <path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
+          <path android:strokeColor="#0A2A5C" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
+          <path android:strokeColor="#FFFFFF" android:strokeWidth="4.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
+          </vector>
+          EOF_FILE
+          cat > app/src/main/res/drawable/ic_logo.xml <<'EOF_FILE'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="150dp" android:height="150dp" android:viewportWidth="64" android:viewportHeight="64">
+          <group android:translateX="-22" android:translateY="-22">
+          <path android:fillColor="#1F5FBF" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
+          <path android:fillColor="#3DA24A" android:pathData="M32,38C36,32 44,32 46,38C48,44 42,48 44,54C40,58 34,54 32,48z"/>
+          <path android:fillColor="#3DA24A" android:pathData="M60,36C66,32 76,36 76,44C76,50 70,52 68,58C64,56 62,50 60,46z"/>
+          <path android:fillColor="#3DA24A" android:pathData="M44,68C50,64 58,66 62,72C58,78 50,80 44,74z"/>
+          <path android:strokeColor="#66FFFFFF" android:strokeWidth="0.8" android:pathData="M54,22C40,34 40,74 54,86C68,74 68,34 54,22M22,54H86M27,40H81M27,68H81"/>
+          <path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
+          <path android:strokeColor="#0A2A5C" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
+          <path android:strokeColor="#FFFFFF" android:strokeWidth="4.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
+          </group>
+          </vector>
+          EOF_FILE
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/colors.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_bg">#0A1F44</color>
+          </resources>
+          EOF_FILE
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_bg"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          EOF_FILE
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon -PvCode=$((100 + GITHUB_RUN_NUMBER))
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: abh-browser-APK
+          path: app/build/outputs/apk/debug/*.apk
+          
