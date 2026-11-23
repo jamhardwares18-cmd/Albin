@@ -294,6 +294,7 @@ jobs:
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:padding="8dp">
                       <ImageButton android:id="@+id/dlBack" android:layout_width="48dp" android:layout_height="48dp" android:src="@drawable/ic_back" android:contentDescription="dlBack" android:background="?android:attr/selectableItemBackgroundBorderless"/>
                       <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="8dp" android:text="Downloads" android:textSize="20sp" android:textStyle="bold"/>
+                      <TextView android:id="@+id/dlRetryAll" android:tag="accent" android:layout_width="wrap_content" android:layout_height="wrap_content" android:padding="12dp" android:text="Retry all" android:textSize="15sp" android:visibility="gone" android:clickable="true" android:focusable="true"/>
                       <TextView android:id="@+id/dlClear" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:padding="12dp" android:text="Clear" android:textSize="15sp" android:clickable="true" android:focusable="true"/>
                   </LinearLayout>
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingBottom="8dp">
@@ -413,6 +414,7 @@ jobs:
           import java.io.FileOutputStream
           import java.net.HttpURLConnection
           import java.net.URL
+          import java.util.Collections
           import java.util.Locale
           import java.util.concurrent.CountDownLatch
           import java.util.concurrent.Executors
@@ -475,6 +477,7 @@ jobs:
           )
           val JUNK_TITLE_WORDS = setOf("play", "dl", "download", "save", "add", "mp3", "song", "track", "audio", "listen")
           val SIZE_ONLY_RE = Regex("^[0-9]+(\\.[0-9]+)?\\s*(mb|kb|gb|kbps)?$", RegexOption.IGNORE_CASE)
+          val WV_FALLBACK_CODES = setOf(401, 403, 406, 409, 412, 429, 503)
 
           class MainActivity : Activity() {
 
@@ -496,6 +499,23 @@ jobs:
               private val lastUiUpdate = AtomicLong(0L)
               private val saveLock = Any()
               private val wvDlLock = Any()
+              private val wvOnlyHosts = Collections.synchronizedSet(HashSet<String>())
+
+              private var dlWv: WebView? = null
+              private var dlWvProfile = ""
+              private var dlWvHost = ""
+              @Volatile private var wvD: DlItem? = null
+              @Volatile private var wvGen = 0
+              @Volatile private var wvToken = ""
+              @Volatile private var wvFos: FileOutputStream? = null
+              private val wvFosLock = Any()
+              @Volatile private var wvLatch: CountDownLatch? = null
+              @Volatile private var wvCompleted = false
+              @Volatile private var wvErr: String? = null
+              @Volatile private var wvDoneBytes = 0L
+              private val wvLastAct = AtomicLong(0L)
+              private val wvFinished = AtomicBoolean(true)
+
               private var customView: View? = null
               private var customCb: WebChromeClient.CustomViewCallback? = null
               private var fileCb: ValueCallback<Array<Uri>>? = null
@@ -584,6 +604,7 @@ jobs:
                   click(R.id.tabActive) { dlTab = 0; refreshDl() }
                   click(R.id.tabDone) { dlTab = 1; refreshDl() }
                   click(R.id.dlBack) { hidePages() }
+                  click(R.id.dlRetryAll) { retryAllFailed() }
                   click(R.id.dlClear) { clearDownloadsTab() }
                   click(R.id.setBack) { hidePages() }
                   click(R.id.tabsBack) { hidePages() }
@@ -672,6 +693,12 @@ jobs:
                       }
                       if (ready) updateEngine(false)
                   }.start()
+              }
+
+              override fun onDestroy() {
+                  try { dlWv?.destroy() } catch (e: Exception) { }
+                  dlWv = null
+                  super.onDestroy()
               }
 
               // ---------- helpers ----------
@@ -834,7 +861,13 @@ jobs:
                       v.setTextColor(col.text)
                       v.setHintTextColor(col.sec)
                   } else if (v is TextView && tag != "logo") {
-                      v.setTextColor(if (tag == "sec") col.sec else col.text)
+                      v.setTextColor(
+                          when (tag) {
+                              "sec" -> col.sec
+                              "accent" -> 0xFF2D7FF9.toInt()
+                              else -> col.text
+                          }
+                      )
                   }
                   if (v is ImageButton) v.setColorFilter(col.text)
                   if (v is ViewGroup) {
@@ -1495,7 +1528,7 @@ jobs:
                   }
               }
 
-              // ---------- folder & MP3 scanner (works across sites, with WebView fallback on 403/CF) ----------
+              // ---------- folder & MP3 scanner (works across sites, with WebView fallback on 403/409/CF) ----------
 
               private fun handleLongPressLink(
                   url: String,
@@ -1601,19 +1634,23 @@ jobs:
                   referer: String,
                   cancelled: AtomicBoolean
               ): Pair<String, Document> {
-                  try {
-                      val conn = openFollow(url, ua, 0L, profile, referer)
+                  val host = (Uri.parse(url).host ?: "").lowercase(Locale.US)
+                  if (host !in wvOnlyHosts) {
                       try {
-                          val finalUrl = conn.url.toString()
-                          val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                          if (!isChallengeHtml(html)) {
-                              return finalUrl to Jsoup.parse(html, finalUrl)
+                          val conn = openFollow(url, ua, 0L, profile, referer)
+                          try {
+                              val finalUrl = conn.url.toString()
+                              val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                              if (!isChallengeHtml(html)) {
+                                  return finalUrl to Jsoup.parse(html, finalUrl)
+                              }
+                          } finally {
+                              conn.disconnect()
                           }
-                      } finally {
-                          conn.disconnect()
+                      } catch (e: HttpCodeException) {
+                          if (e.code !in WV_FALLBACK_CODES) throw e
+                          if (host.isNotEmpty()) wvOnlyHosts.add(host)
                       }
-                  } catch (e: HttpCodeException) {
-                      if (e.code !in listOf(401, 403, 429, 503)) throw e
                   }
                   if (cancelled.get()) throw Exception("Cancelled")
                   return fetchHtmlViaWebView(url, profile, referer, cancelled)
@@ -2267,6 +2304,25 @@ jobs:
 
               // ---------- downloads ----------
 
+              private fun retryAllFailed() {
+                  val failed = items.filter { it.state == 3 }.reversed()
+                  if (failed.isEmpty()) return
+                  for (d in failed) {
+                      d.stop = 0
+                      d.state = 0
+                      d.gen++
+                      val g = d.gen
+                      if (d.kind == 0) {
+                          val ck = cookieText(d.link, d.profile)
+                          exec.execute { runDownload(d, ck, g) }
+                      } else {
+                          directExec.execute { runDirect(d, g) }
+                      }
+                  }
+                  refreshDl()
+                  toast("Retrying ${failed.size} downloads")
+              }
+
               private fun clearDownloadsTab() {
                   if (dlTab == 0) {
                       val active = items.filter { it.state != 2 }
@@ -2793,6 +2849,8 @@ jobs:
                       v.setTypeface(null, if (sel) Typeface.BOLD else Typeface.NORMAL)
                       v.background = if (sel) shape(col.card, 20) else null
                   }
+                  val hasFailed = dlTab == 0 && items.any { it.state == 3 }
+                  findViewById<View>(R.id.dlRetryAll).visibility = if (hasFailed) View.VISIBLE else View.GONE
                   findViewById<TextView>(R.id.dlEmpty).text =
                       if (dlTab == 0) "No active downloads" else "No downloaded files yet"
                   dlAdapter.notifyDataSetChanged()
@@ -2959,96 +3017,113 @@ jobs:
                   }
               }
 
+              inner class WvDlBridge {
+                  @JavascriptInterface
+                  fun onMeta(tok: String, total: Long, ct: String) {
+                      if (tok != wvToken) return
+                      val d = wvD ?: return
+                      wvLastAct.set(System.currentTimeMillis())
+                      if (total > 0) d.total = total
+                      if (d.customName) {
+                          val ext = audioExtFromMeta(null, d.link, ct)
+                          d.name = sanitizeName(d.title).ifEmpty { "Track" } + ext
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun onChunk(tok: String, b64: String) {
+                      if (tok != wvToken) return
+                      val d = wvD ?: return
+                      if (d.stop != 0 || d.gen != wvGen) return
+                      wvLastAct.set(System.currentTimeMillis())
+                      val bytes = Base64.decode(b64, Base64.DEFAULT)
+                      synchronized(wvFosLock) {
+                          wvFos?.write(bytes)
+                      }
+                      wvDoneBytes += bytes.size
+                      d.done = wvDoneBytes
+                      if (d.total > 0) d.progress = (wvDoneBytes * 100 / d.total).toInt().coerceIn(0, 100)
+                      ui()
+                  }
+
+                  @JavascriptInterface
+                  fun onDone(tok: String) {
+                      if (tok != wvToken) return
+                      wvLastAct.set(System.currentTimeMillis())
+                      if (wvFinished.compareAndSet(false, true)) {
+                          wvCompleted = true
+                          wvLatch?.countDown()
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun onFail(tok: String, msg: String) {
+                      if (tok != wvToken) return
+                      if (wvFinished.compareAndSet(false, true)) {
+                          if (msg != "STOPPED") wvErr = msg
+                          wvLatch?.countDown()
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun shouldStop(tok: String): Boolean {
+                      if (tok != wvToken) return true
+                      val d = wvD ?: return true
+                      return d.stop != 0 || d.gen != wvGen
+                  }
+              }
+
               @SuppressLint("SetJavaScriptEnabled")
               private fun downloadViaWebView(d: DlItem, g: Int, tmpFile: File): Boolean {
                   synchronized(wvDlLock) {
                       if (d.stop != 0 || d.gen != g) return false
                       val linkUri = Uri.parse(d.link)
+                      val linkHost = (linkUri.host ?: "").lowercase(Locale.US)
                       val pageUri = if (d.page.isNotEmpty()) Uri.parse(d.page) else null
-                      val originUrl = if (pageUri != null && linkUri.host.equals(pageUri.host, ignoreCase = true)) {
+                      val originUrl = if (pageUri != null && linkHost.equals(pageUri.host, ignoreCase = true)) {
                           d.page
                       } else {
                           "${linkUri.scheme ?: "https"}://${linkUri.host ?: ""}/"
                       }
+
+                      val token = "${d.id}_$g"
                       val latch = CountDownLatch(1)
-                      val finished = AtomicBoolean(false)
-                      val completed = AtomicBoolean(false)
-                      val lastAct = AtomicLong(System.currentTimeMillis())
-                      var errMsg: String? = null
-                      val holder = arrayOfNulls<WebView>(1)
-                      val handler = Handler(Looper.getMainLooper())
-                      val fosLock = Any()
-                      var doneBytes = 0L
                       if (tmpFile.exists()) tmpFile.delete()
                       val fos = FileOutputStream(tmpFile, false)
 
-                      fun cleanup(wv: WebView?) {
-                          if (wv != null) {
-                              try { wv.stopLoading() } catch (e: Exception) { }
-                              try { wv.destroy() } catch (e: Exception) { }
-                          }
-                      }
-
-                      val bridge = object {
-                          @JavascriptInterface
-                          fun onMeta(total: Long, ct: String) {
-                              lastAct.set(System.currentTimeMillis())
-                              if (total > 0) d.total = total
-                              if (d.customName) {
-                                  val ext = audioExtFromMeta(null, d.link, ct)
-                                  d.name = sanitizeName(d.title).ifEmpty { "Track" } + ext
-                              }
-                          }
-
-                          @JavascriptInterface
-                          fun onChunk(b64: String) {
-                              if (d.stop != 0 || d.gen != g) return
-                              lastAct.set(System.currentTimeMillis())
-                              val bytes = Base64.decode(b64, Base64.DEFAULT)
-                              synchronized(fosLock) {
-                                  fos.write(bytes)
-                              }
-                              doneBytes += bytes.size
-                              d.done = doneBytes
-                              if (d.total > 0) d.progress = (doneBytes * 100 / d.total).toInt().coerceIn(0, 100)
-                              ui()
-                          }
-
-                          @JavascriptInterface
-                          fun onDone() {
-                              lastAct.set(System.currentTimeMillis())
-                              completed.set(true)
-                              if (finished.compareAndSet(false, true)) {
-                                  handler.post { cleanup(holder[0]) }
-                                  latch.countDown()
-                              }
-                          }
-
-                          @JavascriptInterface
-                          fun onFail(msg: String) {
-                              if (msg != "STOPPED") errMsg = msg
-                              if (finished.compareAndSet(false, true)) {
-                                  handler.post { cleanup(holder[0]) }
-                                  latch.countDown()
-                              }
-                          }
-
-                          @JavascriptInterface
-                          fun shouldStop(): Boolean = d.stop != 0 || d.gen != g
-                      }
+                      wvD = d
+                      wvGen = g
+                      wvToken = token
+                      synchronized(wvFosLock) { wvFos = fos }
+                      wvLatch = latch
+                      wvCompleted = false
+                      wvErr = null
+                      wvDoneBytes = 0L
+                      wvLastAct.set(System.currentTimeMillis())
+                      wvFinished.set(false)
 
                       val urlLiteral = JSONObject.quote(d.link)
+                      val tokLiteral = JSONObject.quote(token)
                       val fetchJs = """
-                      (async function(){
+                      (async function(tok){
                         try {
-                          if (window.__abhDlRun) return;
-                          window.__abhDlRun = true;
-                          var resp = await fetch($urlLiteral, { credentials: 'include' });
-                          if (!resp.ok) { DL.onFail('Server returned HTTP ' + resp.status); return; }
+                          var resp = null;
+                          for (var tries = 0; tries < 3; tries++) {
+                            if (DL.shouldStop(tok)) { DL.onFail(tok, 'STOPPED'); return; }
+                            resp = await fetch($urlLiteral, { credentials: 'include' });
+                            if (resp.ok) break;
+                            if ((resp.status === 409 || resp.status === 429 || resp.status === 503) && tries < 2) {
+                              var waitMs = (tries + 1) * 2000;
+                              await new Promise(function(r){ setTimeout(r, waitMs); });
+                              continue;
+                            }
+                            DL.onFail(tok, 'Server returned HTTP ' + resp.status);
+                            return;
+                          }
                           var ct = (resp.headers.get('content-type') || '').toLowerCase();
-                          if (ct.indexOf('text/html') >= 0) { DL.onFail('Server returned webpage instead of MP3'); return; }
+                          if (ct.indexOf('text/html') >= 0) { DL.onFail(tok, 'Server returned webpage instead of MP3'); return; }
                           var len = parseInt(resp.headers.get('content-length') || '0', 10) || 0;
-                          DL.onMeta(len, ct);
+                          DL.onMeta(tok, len, ct);
                           function u8ToB64(u8) {
                             var s = '';
                             for (var i = 0; i < u8.length; i += 8192) {
@@ -3059,15 +3134,15 @@ jobs:
                           function sendChunks(u8) {
                             var CHUNK = 49152;
                             for (var i = 0; i < u8.length; i += CHUNK) {
-                              if (DL.shouldStop()) return false;
-                              DL.onChunk(u8ToB64(u8.subarray(i, Math.min(i + CHUNK, u8.length))));
+                              if (DL.shouldStop(tok)) return false;
+                              DL.onChunk(tok, u8ToB64(u8.subarray(i, Math.min(i + CHUNK, u8.length))));
                             }
                             return true;
                           }
                           if (!resp.body || !resp.body.getReader) {
                             var ab = new Uint8Array(await resp.arrayBuffer());
-                            if (sendChunks(ab)) DL.onDone();
-                            else DL.onFail('STOPPED');
+                            if (sendChunks(ab)) DL.onDone(tok);
+                            else DL.onFail(tok, 'STOPPED');
                             return;
                           }
                           var reader = resp.body.getReader();
@@ -3086,15 +3161,15 @@ jobs:
                             return sendChunks(merged);
                           }
                           while (true) {
-                            if (DL.shouldStop()) {
+                            if (DL.shouldStop(tok)) {
                               try { await reader.cancel(); } catch(e) {}
-                              DL.onFail('STOPPED');
+                              DL.onFail(tok, 'STOPPED');
                               return;
                             }
                             var r = await reader.read();
                             if (r.done) {
-                              if (flush()) DL.onDone();
-                              else DL.onFail('STOPPED');
+                              if (flush()) DL.onDone(tok);
+                              else DL.onFail(tok, 'STOPPED');
                               return;
                             }
                             pending.push(r.value);
@@ -3102,26 +3177,27 @@ jobs:
                             if (pendingLen >= 49152) {
                               if (!flush()) {
                                 try { await reader.cancel(); } catch(e) {}
-                                DL.onFail('STOPPED');
+                                DL.onFail(tok, 'STOPPED');
                                 return;
                               }
                             }
                           }
                         } catch (e) {
-                          DL.onFail(e && e.message ? e.message : 'Download failed');
+                          DL.onFail(tok, e && e.message ? e.message : 'Download failed');
                         }
-                      })();
+                      })($tokLiteral);
                       """.trimIndent()
 
+                      val handler = Handler(Looper.getMainLooper())
                       fun tryStartFetch(wv: WebView, attempt: Int) {
-                          if (finished.get() || d.stop != 0 || d.gen != g) return
+                          if (wvFinished.get() || d.stop != 0 || d.gen != g || wvToken != token) return
                           wv.evaluateJavascript("document.documentElement.outerHTML.slice(0,2500)") { raw ->
-                              if (finished.get()) return@evaluateJavascript
+                              if (wvFinished.get() || wvToken != token) return@evaluateJavascript
                               val snippet = (JSONTokener(raw).nextValue() as? String) ?: ""
                               if ((snippet.length < 100 || isChallengeHtml(snippet)) && attempt < 6) {
                                   handler.postDelayed({ tryStartFetch(wv, attempt + 1) }, 1200)
                               } else {
-                                  lastAct.set(System.currentTimeMillis())
+                                  wvLastAct.set(System.currentTimeMillis())
                                   wv.evaluateJavascript(fetchJs, null)
                               }
                           }
@@ -3129,47 +3205,64 @@ jobs:
 
                       runOnUiThread {
                           try {
-                              val wv = WebView(this@MainActivity)
-                              holder[0] = wv
-                              if (d.profile.isNotEmpty() && multiProfile) {
-                                  try { WebViewCompat.setProfile(wv, d.profile) } catch (e: Exception) { }
-                              }
-                              applyWeb(wv)
-                              wv.addJavascriptInterface(bridge, "DL")
-                              wv.webViewClient = object : WebViewClient() {
-                                  override fun onPageFinished(view: WebView?, url: String?) {
-                                      if (finished.get()) return
-                                      handler.postDelayed({
-                                          if (!finished.get() && view != null) tryStartFetch(view, 0)
-                                      }, 300)
+                              val warm = dlWv != null && dlWvProfile == d.profile && dlWvHost == linkHost
+                              if (warm) {
+                                  wvLastAct.set(System.currentTimeMillis())
+                                  dlWv!!.evaluateJavascript(fetchJs, null)
+                              } else {
+                                  try { dlWv?.destroy() } catch (e: Exception) { }
+                                  val wv = WebView(this@MainActivity)
+                                  dlWv = wv
+                                  dlWvProfile = d.profile
+                                  dlWvHost = linkHost
+                                  if (d.profile.isNotEmpty() && multiProfile) {
+                                      try { WebViewCompat.setProfile(wv, d.profile) } catch (e: Exception) { }
                                   }
+                                  applyWeb(wv)
+                                  wv.addJavascriptInterface(WvDlBridge(), "DL")
+                                  wv.webViewClient = object : WebViewClient() {
+                                      override fun onPageFinished(view: WebView?, url: String?) {
+                                          if (wvFinished.get() || wvToken != token) return
+                                          handler.postDelayed({
+                                              if (!wvFinished.get() && wvToken == token && view != null) tryStartFetch(view, 0)
+                                          }, 300)
+                                      }
+                                  }
+                                  wv.loadUrl(originUrl)
                               }
-                              wv.loadUrl(originUrl)
                           } catch (e: Exception) {
-                              errMsg = e.message ?: "WebView init error"
-                              if (finished.compareAndSet(false, true)) latch.countDown()
+                              if (wvFinished.compareAndSet(false, true)) {
+                                  wvErr = e.message ?: "WebView init error"
+                                  latch.countDown()
+                              }
                           }
                       }
 
                       try {
                           while (!latch.await(1500, TimeUnit.MILLISECONDS)) {
                               if (d.stop != 0 || d.gen != g) break
-                              if (System.currentTimeMillis() - lastAct.get() > 35000) {
-                                  errMsg = "Download timed out"
+                              if (System.currentTimeMillis() - wvLastAct.get() > 35000) {
+                                  wvErr = "Download timed out"
                                   break
                               }
                           }
                       } finally {
-                          if (finished.compareAndSet(false, true)) {
-                              handler.post { cleanup(holder[0]) }
-                          }
-                          synchronized(fosLock) {
+                          wvFinished.set(true)
+                          wvToken = ""
+                          synchronized(wvFosLock) {
+                              wvFos = null
                               try { fos.flush() } catch (e: Exception) { }
                               try { fos.close() } catch (e: Exception) { }
                           }
                       }
                       if (d.stop != 0 || d.gen != g) return false
-                      if (!completed.get()) throw Exception(errMsg ?: "Download failed")
+                      if (!wvCompleted) {
+                          if (wvErr?.contains("HTTP 403") == true) {
+                              dlWvHost = ""
+                          }
+                          throw Exception(wvErr ?: "Download failed")
+                      }
+                      try { Thread.sleep(350) } catch (e: Exception) { }
                       return true
                   }
               }
@@ -3183,61 +3276,68 @@ jobs:
                       dir.mkdirs()
                       val tmpFile = File(dir, "part.bin")
                       var completed = false
-                      var useWv = false
-                      try {
-                          var offset = if (tmpFile.exists()) tmpFile.length() else 0L
-                          var conn = openFollow(d.link, d.ua, offset, d.profile, d.page)
-                          var ct = (conn.contentType ?: "").lowercase(Locale.US)
-                          if (d.expectAudio && ct.contains("text/html")) {
-                              val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().take(200000) }
-                              val base = conn.url.toString()
-                              conn.disconnect()
-                              val doc = Jsoup.parse(html, base)
-                              var redir = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
-                                  ?.substringAfter("url=", "")?.trim('"', '\'', ' ') ?: ""
-                              if (redir.isEmpty()) {
-                                  redir = doc.select("a[href], source[src], audio[src]")
-                                      .map { it.absUrl(if (it.hasAttr("href")) "href" else "src") }
-                                      .firstOrNull { isAudioUrl(it) } ?: ""
-                              }
-                              if (redir.isEmpty()) throw Exception("Server returned webpage instead of MP3")
-                              val resolved = URL(URL(base), redir).toString()
-                              offset = 0L
-                              conn = openFollow(resolved, d.ua, 0L, d.profile, base)
-                              ct = (conn.contentType ?: "").lowercase(Locale.US)
-                              if (ct.contains("text/html")) {
+                      val host = (Uri.parse(d.link).host ?: "").lowercase(Locale.US)
+                      var useWv = host in wvOnlyHosts
+                      if (!useWv) {
+                          try {
+                              var offset = if (tmpFile.exists()) tmpFile.length() else 0L
+                              var conn = openFollow(d.link, d.ua, offset, d.profile, d.page)
+                              var ct = (conn.contentType ?: "").lowercase(Locale.US)
+                              if (d.expectAudio && ct.contains("text/html")) {
+                                  val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().take(200000) }
+                                  val base = conn.url.toString()
                                   conn.disconnect()
-                                  throw Exception("Server returned webpage instead of MP3")
-                              }
-                          }
-                          if (offset == 0L && d.customName) {
-                              val ext = audioExtFromMeta(conn.getHeaderField("Content-Disposition"), conn.url.toString(), ct)
-                              d.name = sanitizeName(d.title).ifEmpty { "Track" } + ext
-                          }
-                          val append = offset > 0 && conn.responseCode == 206
-                          if (!append) offset = 0L
-                          val len = conn.contentLengthLong
-                          if (len > 0) d.total = offset + len
-                          var done = offset
-                          conn.inputStream.use { ins ->
-                              FileOutputStream(tmpFile, append).use { out ->
-                                  val buf = ByteArray(65536)
-                                  while (true) {
-                                      val n = ins.read(buf)
-                                      if (n < 0) { completed = true; break }
-                                      if (d.stop != 0 || d.gen != g) break
-                                      out.write(buf, 0, n)
-                                      done += n
-                                      d.done = done
-                                      if (d.total > 0) d.progress = (done * 100 / d.total).toInt().coerceIn(0, 100)
-                                      ui()
+                                  val doc = Jsoup.parse(html, base)
+                                  var redir = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
+                                      ?.substringAfter("url=", "")?.trim('"', '\'', ' ') ?: ""
+                                  if (redir.isEmpty()) {
+                                      redir = doc.select("a[href], source[src], audio[src]")
+                                          .map { it.absUrl(if (it.hasAttr("href")) "href" else "src") }
+                                          .firstOrNull { isAudioUrl(it) } ?: ""
+                                  }
+                                  if (redir.isEmpty()) throw Exception("Server returned webpage instead of MP3")
+                                  val resolved = URL(URL(base), redir).toString()
+                                  offset = 0L
+                                  conn = openFollow(resolved, d.ua, 0L, d.profile, base)
+                                  ct = (conn.contentType ?: "").lowercase(Locale.US)
+                                  if (ct.contains("text/html")) {
+                                      conn.disconnect()
+                                      throw Exception("Server returned webpage instead of MP3")
                                   }
                               }
+                              if (offset == 0L && d.customName) {
+                                  val ext = audioExtFromMeta(conn.getHeaderField("Content-Disposition"), conn.url.toString(), ct)
+                                  d.name = sanitizeName(d.title).ifEmpty { "Track" } + ext
+                              }
+                              val append = offset > 0 && conn.responseCode == 206
+                              if (!append) offset = 0L
+                              val len = conn.contentLengthLong
+                              if (len > 0) d.total = offset + len
+                              var done = offset
+                              conn.inputStream.use { ins ->
+                                  FileOutputStream(tmpFile, append).use { out ->
+                                      val buf = ByteArray(65536)
+                                      while (true) {
+                                          val n = ins.read(buf)
+                                          if (n < 0) { completed = true; break }
+                                          if (d.stop != 0 || d.gen != g) break
+                                          out.write(buf, 0, n)
+                                          done += n
+                                          d.done = done
+                                          if (d.total > 0) d.progress = (done * 100 / d.total).toInt().coerceIn(0, 100)
+                                          ui()
+                                      }
+                                  }
+                              }
+                              conn.disconnect()
+                          } catch (e: HttpCodeException) {
+                              if (e.code in WV_FALLBACK_CODES) {
+                                  if (host.isNotEmpty()) wvOnlyHosts.add(host)
+                                  useWv = true
+                              } else {
+                                  throw e
+                              }
                           }
-                          conn.disconnect()
-                      } catch (e: HttpCodeException) {
-                          if (e.code in listOf(401, 403, 429, 503)) useWv = true
-                          else throw e
                       }
                       if (useWv) {
                           completed = downloadViaWebView(d, g, tmpFile)
