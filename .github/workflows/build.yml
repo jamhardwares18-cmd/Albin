@@ -407,6 +407,7 @@ jobs:
           import org.json.JSONTokener
           import org.jsoup.Jsoup
           import org.jsoup.nodes.Document
+          import org.jsoup.nodes.Element
           import java.io.File
           import java.io.FileOutputStream
           import java.net.HttpURLConnection
@@ -467,6 +468,8 @@ jobs:
               "contact", "about", "privacy", "terms", "dmca", "policy", "faq", "help", "next", "prev",
               "previous", "back", "top", "more", "share", "rss", "feed", "menu", "categories"
           )
+          val JUNK_TITLE_WORDS = setOf("play", "dl", "download", "save", "add", "mp3", "song", "track", "audio", "listen")
+          val SIZE_ONLY_RE = Regex("^[0-9]+(\\.[0-9]+)?\\s*(mb|kb|gb|kbps)?$", RegexOption.IGNORE_CASE)
 
           class MainActivity : Activity() {
 
@@ -694,6 +697,14 @@ jobs:
               private fun sanitizeFolder(f: String): String =
                   f.split("/").map { sanitizeName(it) }.filter { it.isNotEmpty() && it != "." && it != ".." }.joinToString("/")
 
+              private fun isJunkTitle(s: String): Boolean {
+                  val l = s.trim().lowercase(Locale.US)
+                  if (l.length <= 2) return true
+                  if (l in JUNK_TITLE_WORDS) return true
+                  if (SIZE_ONLY_RE.matches(l)) return true
+                  return false
+              }
+
               private fun urlExt(u: String): String {
                   val path = u.substringBefore('#').substringBefore('?')
                   val seg = path.substringAfterLast('/', "")
@@ -830,7 +841,7 @@ jobs:
                   @JavascriptInterface
                   fun setPendingName(title: String) {
                       val clean = sanitizeName(title)
-                      if (clean.isNotEmpty()) {
+                      if (!isJunkTitle(clean)) {
                           pendingClickName = clean
                           pendingClickTime = System.currentTimeMillis()
                       }
@@ -851,25 +862,58 @@ jobs:
                     function isDlHref(h) {
                       if (!h) return false;
                       var l = h.toLowerCase();
-                      return isAudioHref(h) || l.indexOf('download') >= 0 || l.indexOf('dl=') >= 0 || l.indexOf('file=') >= 0;
+                      return isAudioHref(h) || l.indexOf('download') >= 0 || l.indexOf('dl=') >= 0 || l.indexOf('file=') >= 0 || l.indexOf('get') >= 0;
                     }
                     function isPlayElem(el) {
                       if (!el) return false;
                       var s = ((el.alt||'') + ' ' + (el.title||'') + ' ' + (el.className||'') + ' ' + (el.id||'') + ' ' + (el.src||'')).toLowerCase();
                       return s.indexOf('play') >= 0 && s.indexOf('down') < 0 && s.indexOf('dl') < 0;
                     }
+                    function isJunkTxt(s) {
+                      if (!s) return true;
+                      var l = s.trim().toLowerCase();
+                      if (l.length <= 2) return true;
+                      if (/^(play|dl|download|save|add|mp3|song|track|audio|listen)$/.test(l)) return true;
+                      if (/^[0-9]+(\.[0-9]+)?\s*(mb|kb|gb|kbps)?$/.test(l)) return true;
+                      return false;
+                    }
                     function rowTitle(row, skipA) {
                       if (!row) return '';
-                      var as = row.querySelectorAll('a');
                       var best = '';
+                      var as = row.querySelectorAll('a');
                       for (var i = 0; i < as.length; i++) {
                         if (as[i] === skipA) continue;
                         var txt = (as[i].innerText || as[i].textContent || '').trim();
-                        if (txt.length > best.length) best = txt;
+                        if (!isJunkTxt(txt) && txt.length > best.length) best = txt;
                       }
                       if (best) return best;
-                      var full = (row.innerText || row.textContent || '').trim();
-                      return full.split('\n')[0].trim();
+                      var cells = row.querySelectorAll('td, th, span, font, b, strong, p, div');
+                      for (var j = 0; j < cells.length; j++) {
+                        var t = (cells[j].innerText || cells[j].textContent || '').trim();
+                        if (!isJunkTxt(t) && t.length > best.length && t.indexOf('\n') < 0) best = t;
+                      }
+                      if (best) return best;
+                      var parts = (row.innerText || row.textContent || '').split(/[\n\t]+/);
+                      for (var k = 0; k < parts.length; k++) {
+                        var p = parts[k].trim();
+                        if (!isJunkTxt(p) && p.length > best.length) best = p;
+                      }
+                      return best;
+                    }
+                    function findRowDlLink(row, skipA) {
+                      if (!row) return null;
+                      var links = row.querySelectorAll('a[href]');
+                      if (links.length === 0 || links.length > 6) return null;
+                      for (var i = 0; i < links.length; i++) {
+                        var sib = links[i];
+                        if (sib === skipA) continue;
+                        var img = sib.querySelector('img');
+                        var imgHint = img ? ((img.src||'') + ' ' + (img.alt||'') + ' ' + (img.title||'')).toLowerCase() : '';
+                        if (sib.href && (isDlHref(sib.href) || imgHint.indexOf('dl') >= 0 || imgHint.indexOf('down') >= 0 || imgHint.indexOf('save') >= 0)) {
+                          return sib;
+                        }
+                      }
+                      return null;
                     }
                     function findMp3InAttr(el) {
                       if (!el) return '';
@@ -903,55 +947,55 @@ jobs:
                       if (a && isPlayElem(a)) return;
                       if (a && a.href) {
                         var txt = (a.innerText || a.textContent || a.title || '').trim();
+                        var row = a.closest('tr, li');
+                        var rowName = !isJunkTxt(txt) ? txt : rowTitle(row, a);
                         if (isAudioHref(a.href)) {
                           e.preventDefault();
                           e.stopPropagation();
-                          ABH.onAudioLink(a.href, txt);
+                          ABH.onAudioLink(a.href, rowName);
                           return;
                         }
-                        var row = a.closest('tr, li');
-                        if (row) {
-                          var links = row.querySelectorAll('a');
-                          if (links.length <= 6) {
-                            var rowName = txt || rowTitle(row, null);
-                            var embedded = findMp3InAttr(a) || findMp3InAttr(t);
-                            if (embedded) {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              ABH.onAudioLink(embedded, rowName);
-                              return;
-                            }
-                            var hrefL = (a.getAttribute('href') || '').trim().toLowerCase();
-                            var isScriptOrHash = !hrefL || hrefL === '#' || hrefL.indexOf('javascript:') === 0 || hrefL.indexOf('play') >= 0;
-                            var hasDlSib = null;
-                            for (var i = 0; i < links.length; i++) {
-                              var sib = links[i];
-                              if (sib === a) continue;
-                              var img = sib.querySelector('img');
-                              var imgHint = img ? ((img.src||'') + ' ' + (img.alt||'') + ' ' + (img.title||'')).toLowerCase() : '';
-                              if (sib.href && (isDlHref(sib.href) || imgHint.indexOf('dl') >= 0 || imgHint.indexOf('down') >= 0)) {
-                                hasDlSib = sib;
-                                break;
-                              }
-                            }
-                            if (hasDlSib && (isScriptOrHash || row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(hasDlSib.href))) {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              ABH.onAudioLink(hasDlSib.href, rowName);
-                              return;
-                            }
-                            if (rowName) ABH.setPendingName(rowName);
+                        if (row && row.querySelectorAll('a').length <= 6) {
+                          var embedded = findMp3InAttr(a) || findMp3InAttr(t);
+                          if (embedded) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            ABH.onAudioLink(embedded, rowName);
+                            return;
                           }
+                          var hrefL = (a.getAttribute('href') || '').trim().toLowerCase();
+                          var isScriptOrHash = !hrefL || hrefL === '#' || hrefL.indexOf('javascript:') === 0 || hrefL.indexOf('play') >= 0;
+                          var dlSib = findRowDlLink(row, a);
+                          if (dlSib && (isScriptOrHash || row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSib.href))) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            ABH.onAudioLink(dlSib.href, rowName);
+                            return;
+                          }
+                          if (rowName) ABH.setPendingName(rowName);
+                        } else if (!isJunkTxt(txt)) {
+                          ABH.setPendingName(txt);
                         }
-                        if (txt) ABH.setPendingName(txt);
                       } else {
                         var mp3 = findMp3InAttr(t);
+                        var row2 = t.closest('tr, li');
                         if (mp3) {
                           e.preventDefault();
                           e.stopPropagation();
-                          var row2 = t.closest('tr, li');
-                          var name2 = (t.innerText || t.textContent || '').trim() || rowTitle(row2, null);
-                          ABH.onAudioLink(mp3, name2);
+                          var name2 = (t.innerText || t.textContent || '').trim();
+                          ABH.onAudioLink(mp3, !isJunkTxt(name2) ? name2 : rowTitle(row2, null));
+                          return;
+                        }
+                        if (row2) {
+                          var clickedTxt = (t.innerText || t.textContent || '').trim();
+                          if (!isJunkTxt(clickedTxt)) {
+                            var dlSib2 = findRowDlLink(row2, null);
+                            if (dlSib2 && (row2.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSib2.href))) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              ABH.onAudioLink(dlSib2.href, rowTitle(row2, null) || clickedTxt);
+                            }
+                          }
                         }
                       }
                     }, true);
@@ -1451,21 +1495,44 @@ jobs:
                   }
               }
 
+              private fun extractRowTitle(row: Element?): String {
+                  if (row == null) return ""
+                  var best = ""
+                  for (a in row.select("a")) {
+                      val t = sanitizeName(a.text())
+                      if (!isJunkTitle(t) && t.length > best.length) best = t
+                  }
+                  if (best.isNotEmpty()) return best
+                  for (el in row.select("td, th, span, font, b, strong, p, div")) {
+                      if (el.select("tr").size > 1) continue
+                      val t = sanitizeName(el.ownText().ifEmpty { el.text() })
+                      if (!isJunkTitle(t) && t.length > best.length) best = t
+                  }
+                  if (best.isNotEmpty()) return best
+                  val rt = sanitizeName(row.text())
+                  return if (!isJunkTitle(rt)) rt else ""
+              }
+
               private fun analyzePage(doc: Document, baseUrl: String, ignoreUrls: Set<String>): ScanResult {
                   val audios = mutableListOf<FoundLink>()
                   val seenAudio = HashSet<String>()
-                  val seenTitles = HashSet<String>()
+                  val handledRows = HashSet<Element>()
 
-                  fun addAudio(rawUrl: String, rawTitle: String): Boolean {
+                  fun addAudio(rawUrl: String, rawTitle: String, row: Element?): Boolean {
                       val u = rawUrl.substringBefore('#').trim()
                       if (!u.startsWith("http")) return false
                       val nu = normUrl(u)
                       if (nu in seenAudio) return false
-                      val title = sanitizeName(rawTitle).ifEmpty { guessNameFromUrl(u) }
-                      val tKey = title.lowercase(Locale.US)
-                      if (tKey != "track" && tKey != "download" && tKey in seenTitles) return false
+                      if (row != null && row in handledRows) return false
+                      val cleaned = sanitizeName(rawTitle)
+                      val rowFallback = if (isJunkTitle(cleaned)) extractRowTitle(row) else ""
+                      val title = when {
+                          !isJunkTitle(cleaned) -> cleaned
+                          rowFallback.isNotEmpty() -> rowFallback
+                          else -> guessNameFromUrl(u)
+                      }
                       seenAudio.add(nu)
-                      seenTitles.add(tKey)
+                      if (row != null && row.select("a").size <= 8) handledRows.add(row)
                       audios.add(FoundLink(u, title))
                       return true
                   }
@@ -1474,43 +1541,36 @@ jobs:
                   for (a in doc.select("a[href]")) {
                       val h = a.absUrl("href").substringBefore('#').trim()
                       if (!h.startsWith("http") || !isAudioUrl(h)) continue
-                      var t = a.text().trim()
-                      if (t.isEmpty()) {
-                          val row = a.closest("tr, li")
-                          if (row != null) {
-                              for (ra in row.select("a")) {
-                                  val rt = ra.text().trim()
-                                  if (rt.length > t.length) t = rt
-                              }
-                          }
-                      }
-                      addAudio(h, t)
+                      val row = a.closest("tr, li")
+                      val t = sanitizeName(a.text()).let { if (!isJunkTitle(it)) it else extractRowTitle(row) }
+                      addAudio(h, t, row)
                   }
 
                   // 2. <audio> / <source> tags
                   for (el in doc.select("audio[src], source[src]")) {
                       val h = el.absUrl("src")
-                      if (isAudioUrl(h)) addAudio(h, "")
+                      if (isAudioUrl(h)) addAudio(h, "", el.closest("tr, li"))
                   }
 
                   // 3. Embedded audio URLs in onclick / data-* attributes
                   val mp3Re = Regex("https?://[^'\"\\s)]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"\\s)]*)?", RegexOption.IGNORE_CASE)
                   val relMp3Re = Regex("['\"]([^'\"]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"]*)?)['\"]", RegexOption.IGNORE_CASE)
-                  for (el in doc.select("[onclick], [data-src], [data-url], [data-file], [data-mp3]")) {
+                  for (el in doc.select("[onclick], [data-src], [data-url], [data-file], [data-mp3], [data-audio]")) {
                       val row = el.closest("tr, li")
-                      val title = el.text().trim().ifEmpty { row?.select("a")?.maxByOrNull { it.text().length }?.text()?.trim() ?: "" }
-                      for (attr in listOf("data-src", "data-url", "data-file", "data-mp3", "onclick")) {
+                      val rawElText = sanitizeName(el.text())
+                      val title = if (!isJunkTitle(rawElText)) rawElText else extractRowTitle(row)
+                      for (attr in listOf("data-src", "data-url", "data-file", "data-mp3", "data-audio", "onclick")) {
                           val v = el.attr(attr)
                           if (v.isEmpty()) continue
                           val m = mp3Re.find(v)
                           if (m != null) {
-                              addAudio(m.value, title)
+                              addAudio(m.value, title, row)
                           } else {
                               val m2 = relMp3Re.find(v)
                               if (m2 != null) {
                                   try {
                                       val abs = URL(URL(baseUrl), m2.groupValues[1]).toString()
-                                      addAudio(abs, title)
+                                      addAudio(abs, title, row)
                                   } catch (e: Exception) { }
                               }
                           }
@@ -1518,31 +1578,34 @@ jobs:
                   }
 
                   // 4. Song rows with download-icon links (only if row wasn't already added in steps 1-3)
+                  val sizeInRowRe = Regex("\\b[0-9]+(\\.[0-9]+)?\\s*(mb|kb|gb)\\b", RegexOption.IGNORE_CASE)
                   for (row in doc.select("tr, li")) {
+                      if (row in handledRows) continue
                       val links = row.select("a[href]")
                       if (links.isEmpty() || links.size > 6) continue
                       var dlHref = ""
-                      var bestTitle = ""
                       var rowAlreadyHandled = false
+                      val rowHasSize = sizeInRowRe.containsMatchIn(row.text())
                       for (la in links) {
                           val h = la.absUrl("href").substringBefore('#').trim()
                           if (normUrl(h) in seenAudio) { rowAlreadyHandled = true; break }
-                          val lt = la.text().trim()
-                          if (lt.length > bestTitle.length) bestTitle = lt
                           if (dlHref.isEmpty() && h.startsWith("http") && sameHost(h, baseUrl)) {
                               val img = la.selectFirst("img")
                               val hint = ((img?.attr("src") ?: "") + " " + (img?.attr("alt") ?: "") + " " +
                                   (img?.attr("title") ?: "") + " " + la.attr("title")).lowercase(Locale.US)
                               val hl = h.lowercase(Locale.US)
-                              if (hl.contains("download") || hl.contains("dl=") || hl.contains("file=") ||
-                                  hint.contains("dl") || hint.contains("down")
-                              ) {
+                              val isPlay = hint.contains("play") && !hint.contains("dl") && !hint.contains("down")
+                              val isDl = hl.contains("download") || hl.contains("dl=") || hl.contains("file=") ||
+                                  hl.contains("/dl/") || hint.contains("dl") || hint.contains("down") || hint.contains("save")
+                              val isIconInSizedRow = rowHasSize && !isPlay && la.text().trim().isEmpty() && img != null && !hint.contains("plus") && !hint.contains("add")
+                              if (isDl || isIconInSizedRow) {
                                   dlHref = h
                               }
                           }
                       }
-                      if (!rowAlreadyHandled && dlHref.isNotEmpty() && bestTitle.isNotEmpty()) {
-                          addAudio(dlHref, bestTitle)
+                      if (!rowAlreadyHandled && dlHref.isNotEmpty()) {
+                          val bestTitle = extractRowTitle(row)
+                          if (bestTitle.isNotEmpty()) addAudio(dlHref, bestTitle, row)
                       }
                   }
 
@@ -1602,7 +1665,7 @@ jobs:
                       for (sf in firstRes.folders) {
                           queue.addLast(sf to sanitizeFolder("$rootFolder/${sf.name}"))
                       }
-                      while (queue.isNotEmpty() && scannedCount < 200 && queuedSongs < 2000) {
+                      while (queue.isNotEmpty() && scannedCount < 200 && queuedSongs < 3000) {
                           val (folderLink, folderPath) = queue.removeFirst()
                           val nf = normUrl(folderLink.url)
                           if (!visited.add(nf)) continue
@@ -1614,8 +1677,7 @@ jobs:
                               if (subRes.audios.isNotEmpty()) {
                                   val uniqueAudios = subRes.audios.filter {
                                       val k1 = "$folderPath|${normUrl(it.url)}"
-                                      val k2 = "$folderPath|${it.name.lowercase(Locale.US)}"
-                                      seenSongKeys.add(k1) && seenSongKeys.add(k2)
+                                      seenSongKeys.add(k1)
                                   }
                                   if (uniqueAudios.isNotEmpty()) {
                                       queuedSongs += uniqueAudios.size
@@ -2558,7 +2620,7 @@ jobs:
                   val cleanTitle = sanitizeName(titleHint)
                   val rawName = URLUtil.guessFileName(url, null, if (expectAudio) "audio/mpeg" else null)
                   val ext = urlExt(url).let { if (it in AUDIO_EXTS) ".$it" else if (expectAudio) ".mp3" else "" }
-                  val useCustom = cleanTitle.isNotEmpty()
+                  val useCustom = !isJunkTitle(cleanTitle)
                   val finalName = if (useCustom) {
                       val e = ext.ifEmpty { "." + rawName.substringAfterLast('.', "mp3") }
                       cleanTitle + e
@@ -2588,7 +2650,7 @@ jobs:
                   val cleanHint = if (hintFresh) sanitizeName(pendingClickName) else ""
                   val isAudio = isAudioUrl(url) || (mimeHint?.lowercase()?.startsWith("audio/") == true) ||
                       urlExt(guessed) in AUDIO_EXTS
-                  val useCustom = isAudio && cleanHint.isNotEmpty()
+                  val useCustom = isAudio && !isJunkTitle(cleanHint)
                   val ext = urlExt(url).let { if (it in AUDIO_EXTS) ".$it" else "." + guessed.substringAfterLast('.', "mp3") }
                   val finalName = if (useCustom) cleanHint + ext else guessed
                   val d = DlItem(if (useCustom) cleanHint else guessed.substringBeforeLast("."), 0, 0, null, null, "")
