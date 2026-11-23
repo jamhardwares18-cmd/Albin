@@ -143,6 +143,7 @@ jobs:
 
               <application
                   android:allowBackup="true"
+                  android:usesCleartextTraffic="true"
                   android:label="abh browser"
                   android:icon="@mipmap/ic_launcher"
                   android:roundIcon="@mipmap/ic_launcher"
@@ -292,7 +293,8 @@ jobs:
                   android:orientation="vertical" android:clickable="true" android:visibility="gone">
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:padding="8dp">
                       <ImageButton android:id="@+id/dlBack" android:layout_width="48dp" android:layout_height="48dp" android:src="@drawable/ic_back" android:contentDescription="dlBack" android:background="?android:attr/selectableItemBackgroundBorderless"/>
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:text="Downloads" android:textSize="20sp" android:textStyle="bold"/>
+                      <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="8dp" android:text="Downloads" android:textSize="20sp" android:textStyle="bold"/>
+                      <TextView android:id="@+id/dlClear" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:padding="12dp" android:text="Clear" android:textSize="15sp" android:clickable="true" android:focusable="true"/>
                   </LinearLayout>
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingBottom="8dp">
                       <TextView android:id="@+id/tabActive" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_margin="4dp" android:padding="10dp" android:gravity="center" android:text="Downloading" android:textSize="15sp" android:clickable="true" android:focusable="true"/>
@@ -420,6 +422,7 @@ jobs:
           val DARK = Pal(0xFF121214.toInt(), 0xFF3C3C42.toInt(), 0xFF232328.toInt(), 0xFFFFFFFF.toInt(), 0xFF9AA0A6.toInt(), 0xFF8A8A90.toInt())
           val LIGHT = Pal(0xFFFFFFFF.toInt(), 0xFFECEDF1.toInt(), 0xFFF1F3F4.toInt(), 0xFF1B1B1F.toInt(), 0xFF5F6368.toInt(), 0xFF7A7A80.toInt())
           const val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          const val MOBILE_UA = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
           const val REQ_FILE = 77
           const val REQ_TREE = 78
 
@@ -572,6 +575,7 @@ jobs:
                   click(R.id.tabActive) { dlTab = 0; refreshDl() }
                   click(R.id.tabDone) { dlTab = 1; refreshDl() }
                   click(R.id.dlBack) { hidePages() }
+                  click(R.id.dlClear) { clearDownloadsTab() }
                   click(R.id.setBack) { hidePages() }
                   click(R.id.tabsBack) { hidePages() }
                   click(R.id.tabsAdd) {
@@ -702,10 +706,9 @@ jobs:
                   val clean = u.substringBefore('#').trim()
                   val uri = Uri.parse(clean)
                   val host = (uri.host ?: "").lowercase(Locale.US).removePrefix("www.")
-                  val scheme = (uri.scheme ?: "https").lowercase(Locale.US)
                   val path = (uri.path ?: "").let { if (it.length > 1) it.trimEnd('/') else it }
                   val q = uri.encodedQuery
-                  return "$scheme://$host$path" + (if (!q.isNullOrEmpty()) "?$q" else "")
+                  return "$host$path" + (if (!q.isNullOrEmpty()) "?$q" else "")
               }
 
               private fun sameHost(a: String, b: String): Boolean {
@@ -970,6 +973,7 @@ jobs:
                   s.setSupportZoom(true)
                   s.builtInZoomControls = true
                   s.displayZoomControls = false
+                  s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                   if (Build.VERSION.SDK_INT >= 33) {
                       s.isAlgorithmicDarkeningAllowed = dark
                   } else {
@@ -1375,50 +1379,53 @@ jobs:
                       .setCancelable(true)
                       .setOnCancelListener { cancelled.set(true) }
                       .show()
-                  val ua = if (desktop) DESKTOP_UA else null
+                  val ua = if (desktop) DESKTOP_UA else MOBILE_UA
                   Thread {
                       try {
-                          var tmpl = sourceLinks
-                          if (sourceUrl.isNotEmpty() && normUrl(url) == normUrl(sourceUrl)) {
-                              val parsed = Uri.parse(url)
-                              val rootUrl = "${parsed.scheme ?: "https"}://${parsed.host ?: ""}/"
-                              if (normUrl(rootUrl) != normUrl(url)) {
-                                  try {
-                                      val (_, rootDoc) = fetchHtml(rootUrl, ua, profile, sourceUrl)
-                                      val rootSet = HashSet<String>()
-                                      for (a in rootDoc.select("a[href]")) {
-                                          val h = a.absUrl("href")
-                                          if (h.startsWith("http")) rootSet.add(normUrl(h))
-                                      }
-                                      tmpl = rootSet
-                                  } catch (e: Exception) { }
-                              }
-                          }
-                          if (cancelled.get()) return@Thread
                           val (finalUrl, doc) = fetchHtml(url, ua, profile, sourceUrl)
                           if (cancelled.get()) return@Thread
-                          val res = analyzePage(doc, finalUrl, tmpl + setOf(normUrl(sourceUrl), normUrl(finalUrl)))
+
+                          // Build template/sidebar ignore set using both the previous page AND site root
+                          val tmpl = HashSet<String>()
+                          if (sourceUrl.isNotEmpty() && normUrl(finalUrl) != normUrl(sourceUrl)) {
+                              tmpl.addAll(sourceLinks)
+                          }
+                          val parsed = Uri.parse(finalUrl)
+                          val rootUrl = "${parsed.scheme ?: "https"}://${parsed.host ?: ""}/"
+                          if (normUrl(rootUrl) != normUrl(finalUrl)) {
+                              try {
+                                  val (_, rootDoc) = fetchHtml(rootUrl, ua, profile, finalUrl)
+                                  for (a in rootDoc.select("a[href]")) {
+                                      val h = a.absUrl("href")
+                                      if (h.startsWith("http")) tmpl.add(normUrl(h))
+                                  }
+                              } catch (e: Exception) { }
+                          }
+                          if (cancelled.get()) return@Thread
+
+                          val ignore = HashSet<String>(tmpl)
+                          if (sourceUrl.isNotEmpty()) ignore.add(normUrl(sourceUrl))
+                          ignore.add(normUrl(finalUrl))
+
+                          val res = analyzePage(doc, finalUrl, ignore)
                           runOnUiThread {
                               if (cancelled.get() || !wait.isShowing) return@runOnUiThread
                               wait.dismiss()
                               if (res.audios.isEmpty() && res.folders.isEmpty()) {
                                   toast("No MP3 files or subfolders found in $cleanName")
-                              } else if (res.folders.isNotEmpty()) {
-                                  val msg = StringBuilder("$cleanName (${res.folders.size} folders")
-                                  if (res.audios.isNotEmpty()) msg.append(", ${res.audios.size} songs")
-                                  msg.append(") - Download all?")
+                              } else if (res.audios.isNotEmpty()) {
                                   dlg().setTitle(cleanName)
-                                      .setMessage(msg.toString())
+                                      .setMessage("$cleanName (${res.audios.size} songs) - Download all?")
                                       .setPositiveButton("Download all") { _, _ ->
-                                          startFolderBatch(cleanName, finalUrl, res, tmpl, ua, profile)
+                                          enqueueAudioList(res.audios, cleanName, finalUrl, ua, profile, true)
                                       }
                                       .setNegativeButton("Cancel", null)
                                       .show()
                               } else {
                                   dlg().setTitle(cleanName)
-                                      .setMessage("$cleanName (${res.audios.size} songs) - Download all?")
+                                      .setMessage("$cleanName (${res.folders.size} folders) - Download all?")
                                       .setPositiveButton("Download all") { _, _ ->
-                                          enqueueAudioList(res.audios, cleanName, finalUrl, ua, profile, true)
+                                          startFolderBatch(cleanName, finalUrl, res, ignore, ua, profile)
                                       }
                                       .setNegativeButton("Cancel", null)
                                       .show()
@@ -1447,14 +1454,20 @@ jobs:
               private fun analyzePage(doc: Document, baseUrl: String, ignoreUrls: Set<String>): ScanResult {
                   val audios = mutableListOf<FoundLink>()
                   val seenAudio = HashSet<String>()
+                  val seenTitles = HashSet<String>()
 
-                  fun addAudio(rawUrl: String, rawTitle: String) {
+                  fun addAudio(rawUrl: String, rawTitle: String): Boolean {
                       val u = rawUrl.substringBefore('#').trim()
-                      if (!u.startsWith("http")) return
+                      if (!u.startsWith("http")) return false
                       val nu = normUrl(u)
-                      if (!seenAudio.add(nu)) return
+                      if (nu in seenAudio) return false
                       val title = sanitizeName(rawTitle).ifEmpty { guessNameFromUrl(u) }
+                      val tKey = title.lowercase(Locale.US)
+                      if (tKey != "track" && tKey != "download" && tKey in seenTitles) return false
+                      seenAudio.add(nu)
+                      seenTitles.add(tKey)
                       audios.add(FoundLink(u, title))
+                      return true
                   }
 
                   // 1. Direct audio links
@@ -1485,7 +1498,7 @@ jobs:
                   val relMp3Re = Regex("['\"]([^'\"]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"]*)?)['\"]", RegexOption.IGNORE_CASE)
                   for (el in doc.select("[onclick], [data-src], [data-url], [data-file], [data-mp3]")) {
                       val row = el.closest("tr, li")
-                      val title = (el.text().trim().ifEmpty { row?.select("a")?.maxByOrNull { it.text().length }?.text()?.trim() ?: "" })
+                      val title = el.text().trim().ifEmpty { row?.select("a")?.maxByOrNull { it.text().length }?.text()?.trim() ?: "" }
                       for (attr in listOf("data-src", "data-url", "data-file", "data-mp3", "onclick")) {
                           val v = el.attr(attr)
                           if (v.isEmpty()) continue
@@ -1504,16 +1517,16 @@ jobs:
                       }
                   }
 
-                  // 4. Song rows with download-icon links (e.g. download.php?id=... in <tr>/<li>)
+                  // 4. Song rows with download-icon links (only if row wasn't already added in steps 1-3)
                   for (row in doc.select("tr, li")) {
                       val links = row.select("a[href]")
                       if (links.isEmpty() || links.size > 6) continue
                       var dlHref = ""
                       var bestTitle = ""
-                      var hasAudioInRow = false
+                      var rowAlreadyHandled = false
                       for (la in links) {
                           val h = la.absUrl("href").substringBefore('#').trim()
-                          if (normUrl(h) in seenAudio) { hasAudioInRow = true; break }
+                          if (normUrl(h) in seenAudio) { rowAlreadyHandled = true; break }
                           val lt = la.text().trim()
                           if (lt.length > bestTitle.length) bestTitle = lt
                           if (dlHref.isEmpty() && h.startsWith("http") && sameHost(h, baseUrl)) {
@@ -1528,9 +1541,14 @@ jobs:
                               }
                           }
                       }
-                      if (!hasAudioInRow && dlHref.isNotEmpty() && bestTitle.isNotEmpty()) {
+                      if (!rowAlreadyHandled && dlHref.isNotEmpty() && bestTitle.isNotEmpty()) {
                           addAudio(dlHref, bestTitle)
                       }
+                  }
+
+                  // If this folder already contains songs directly, treat it as a song folder (do not crawl sidebar folders)
+                  if (audios.isNotEmpty()) {
+                      return ScanResult(audios, emptyList())
                   }
 
                   // 5. Subfolder links (exclude nav/header/footer, template/sidebar links, utility links, images/assets)
@@ -1574,14 +1592,12 @@ jobs:
                   toast("Scanning ${firstRes.folders.size} folders & starting downloads...")
                   dlTab = 0
                   flyToDownload()
-                  if (firstRes.audios.isNotEmpty()) {
-                      enqueueAudioList(firstRes.audios, rootFolder, rootUrl, ua, profile, false)
-                  }
                   Thread {
-                      var queuedSongs = firstRes.audios.size
+                      var queuedSongs = 0
                       var scannedCount = 0
                       val visited = HashSet<String>(templateLinks)
                       visited.add(normUrl(rootUrl))
+                      val seenSongKeys = HashSet<String>()
                       val queue = ArrayDeque<Pair<FoundLink, String>>()
                       for (sf in firstRes.folders) {
                           queue.addLast(sf to sanitizeFolder("$rootFolder/${sf.name}"))
@@ -1596,9 +1612,16 @@ jobs:
                               visited.add(normUrl(subFinal))
                               val subRes = analyzePage(subDoc, subFinal, visited)
                               if (subRes.audios.isNotEmpty()) {
-                                  queuedSongs += subRes.audios.size
-                                  runOnUiThread {
-                                      enqueueAudioList(subRes.audios, folderPath, subFinal, ua, profile, false)
+                                  val uniqueAudios = subRes.audios.filter {
+                                      val k1 = "$folderPath|${normUrl(it.url)}"
+                                      val k2 = "$folderPath|${it.name.lowercase(Locale.US)}"
+                                      seenSongKeys.add(k1) && seenSongKeys.add(k2)
+                                  }
+                                  if (uniqueAudios.isNotEmpty()) {
+                                      queuedSongs += uniqueAudios.size
+                                      runOnUiThread {
+                                          enqueueAudioList(uniqueAudios, folderPath, subFinal, ua, profile, false)
+                                      }
                                   }
                               } else if (subRes.folders.isNotEmpty()) {
                                   val depth = folderPath.count { it == '/' }
@@ -1943,6 +1966,44 @@ jobs:
               }
 
               // ---------- downloads ----------
+
+              private fun clearDownloadsTab() {
+                  if (dlTab == 0) {
+                      val active = items.filter { it.state != 2 }
+                      if (active.isEmpty()) return
+                      dlg().setTitle("Clear downloading list?")
+                          .setMessage("Remove all ${active.size} active/failed items?")
+                          .setPositiveButton("Clear") { _, _ ->
+                              for (d in active) {
+                                  d.stop = 2
+                                  d.gen++
+                                  if (d.kind == 0) {
+                                      try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }
+                                  }
+                                  File(filesDir, "parts/" + d.id).deleteRecursively()
+                              }
+                              items.removeAll { it.state != 2 }
+                              saveItems()
+                              refreshDl()
+                              toast("Cleared")
+                          }
+                          .setNegativeButton("Cancel", null)
+                          .show()
+                  } else {
+                      val done = items.filter { it.state == 2 }
+                      if (done.isEmpty()) return
+                      dlg().setTitle("Clear history?")
+                          .setMessage("Remove ${done.size} items from this list? (Files on your phone will stay)")
+                          .setPositiveButton("Clear") { _, _ ->
+                              items.removeAll { it.state == 2 }
+                              saveItems()
+                              refreshDl()
+                              toast("Cleared")
+                          }
+                          .setNegativeButton("Cancel", null)
+                          .show()
+                  }
+              }
 
               private fun fmtSize(b: Long): String = when {
                   b >= 1073741824L -> String.format(Locale.US, "%.2f GB", b / 1073741824.0)
@@ -2509,7 +2570,7 @@ jobs:
                   d.link = url
                   d.page = page
                   d.profile = profile
-                  d.ua = if (desktop) DESKTOP_UA else null
+                  d.ua = if (desktop) DESKTOP_UA else MOBILE_UA
                   d.name = finalName
                   d.folder = sanitizeFolder(folderPath)
                   d.customName = useCustom
@@ -2535,7 +2596,7 @@ jobs:
                   d.link = url
                   d.page = page
                   d.profile = profile
-                  d.ua = ua
+                  d.ua = ua ?: MOBILE_UA
                   d.name = finalName
                   d.customName = useCustom
                   d.expectAudio = isAudio
@@ -2559,7 +2620,7 @@ jobs:
                       c.instanceFollowRedirects = false
                       c.connectTimeout = 20000
                       c.readTimeout = 30000
-                      if (ua != null) c.setRequestProperty("User-Agent", ua)
+                      c.setRequestProperty("User-Agent", ua ?: MOBILE_UA)
                       if (referer.isNotEmpty()) c.setRequestProperty("Referer", referer)
                       val ck = cookiesFor(profile).getCookie(url)
                       if (ck != null) c.setRequestProperty("Cookie", ck)
@@ -2875,4 +2936,3 @@ jobs:
         with:
           name: abh-browser-APK
           path: app/build/outputs/apk/debug/*.apk
-          
