@@ -413,7 +413,9 @@ jobs:
           import java.net.HttpURLConnection
           import java.net.URL
           import java.util.Locale
+          import java.util.concurrent.CountDownLatch
           import java.util.concurrent.Executors
+          import java.util.concurrent.TimeUnit
           import java.util.concurrent.atomic.AtomicBoolean
           import java.util.concurrent.atomic.AtomicLong
           import kotlin.math.abs
@@ -426,6 +428,8 @@ jobs:
           const val MOBILE_UA = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
           const val REQ_FILE = 77
           const val REQ_TREE = 78
+
+          class HttpCodeException(val code: Int) : Exception("Server returned HTTP $code")
 
           class Tab(val web: WebView) {
               var home = true
@@ -691,6 +695,9 @@ jobs:
                   return g
               }
 
+              private fun currentWebUa(): String =
+                  tabs.getOrNull(cur)?.web?.settings?.userAgentString ?: MOBILE_UA
+
               private fun sanitizeName(s: String): String =
                   s.replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]+"), " ").replace(Regex("\\s+"), " ").trim().take(120)
 
@@ -865,8 +872,10 @@ jobs:
                   fun onAudioLink(url: String, title: String) {
                       if (url.isBlank()) return
                       runOnUiThread {
-                          val page = tabs.find { it.profile == profile }?.web?.url ?: url
-                          startDirectNamed(url, title, page, profile, "", true)
+                          val t = tabs.find { it.profile == profile }
+                          val page = t?.web?.url ?: url
+                          val ua = t?.web?.settings?.userAgentString ?: currentWebUa()
+                          startDirectNamed(url, title, page, profile, "", true, ua)
                       }
                   }
 
@@ -1191,6 +1200,7 @@ jobs:
                               "for(var i=0;i<as.length;i++){var h=as[i].href;if(h&&h.indexOf('http')===0)ls.push(h.split('#')[0]);}" +
                               "return JSON.stringify({t:window.__abhLastText||'',u:window.__abhLastUrl||'',links:ls});})();"
                           val pageUrl = w.url ?: ""
+                          val webUa = w.settings.userAgentString ?: MOBILE_UA
                           val hitUrl = if (ex != null && (ex.startsWith("http://") || ex.startsWith("https://"))) ex else ""
                           w.evaluateJavascript(infoJs) { raw ->
                               var linkText = ""
@@ -1212,7 +1222,7 @@ jobs:
                               } catch (e: Exception) { }
                               val targetUrl = hitUrl.ifEmpty { if (jsUrl.startsWith("http")) jsUrl else "" }
                               if (targetUrl.isNotEmpty()) {
-                                  handleLongPressLink(targetUrl, linkText, pageUrl, pageLinks, pf)
+                                  handleLongPressLink(targetUrl, linkText, pageUrl, pageLinks, pf, webUa)
                               }
                           }
                           hitUrl.isNotEmpty()
@@ -1226,7 +1236,8 @@ jobs:
                           val u = request?.url?.toString() ?: return false
                           if (isAudioUrl(u)) {
                               val titleHint = if (System.currentTimeMillis() - pendingClickTime < 5000) pendingClickName else ""
-                              startDirectNamed(u, titleHint, view?.url ?: u, pf, "", true)
+                              val ua = view?.settings?.userAgentString ?: currentWebUa()
+                              startDirectNamed(u, titleHint, view?.url ?: u, pf, "", true, ua)
                               return true
                           }
                           return false
@@ -1482,21 +1493,22 @@ jobs:
                   }
               }
 
-              // ---------- folder & MP3 scanner (works across sites) ----------
+              // ---------- folder & MP3 scanner (works across sites, with WebView fallback on 403/CF) ----------
 
               private fun handleLongPressLink(
                   url: String,
                   linkText: String,
                   sourceUrl: String,
                   sourceLinks: Set<String>,
-                  profile: String
+                  profile: String,
+                  webUa: String
               ) {
                   val cleanName = sanitizeName(linkText).ifEmpty { guessNameFromUrl(url) }
                   if (isAudioUrl(url)) {
                       dlg().setTitle(cleanName)
                           .setMessage("Download this audio file?")
                           .setPositiveButton("Download") { _, _ ->
-                              startDirectNamed(url, cleanName, sourceUrl, profile, "", true)
+                              startDirectNamed(url, cleanName, sourceUrl, profile, "", true, webUa)
                           }
                           .setNegativeButton("Cancel", null)
                           .show()
@@ -1508,27 +1520,29 @@ jobs:
                       .setCancelable(true)
                       .setOnCancelListener { cancelled.set(true) }
                       .show()
-                  val ua = if (desktop) DESKTOP_UA else MOBILE_UA
                   Thread {
                       try {
-                          val (finalUrl, doc) = fetchHtml(url, ua, profile, sourceUrl)
+                          val (finalUrl, doc) = fetchHtml(url, webUa, profile, sourceUrl, cancelled)
                           if (cancelled.get()) return@Thread
 
-                          // Build template/sidebar ignore set using both the previous page AND site root
                           val tmpl = HashSet<String>()
+                          val needRootFetch = sourceLinks.isEmpty() ||
+                              (sourceUrl.isNotEmpty() && normUrl(finalUrl) == normUrl(sourceUrl))
                           if (sourceUrl.isNotEmpty() && normUrl(finalUrl) != normUrl(sourceUrl)) {
                               tmpl.addAll(sourceLinks)
                           }
-                          val parsed = Uri.parse(finalUrl)
-                          val rootUrl = "${parsed.scheme ?: "https"}://${parsed.host ?: ""}/"
-                          if (normUrl(rootUrl) != normUrl(finalUrl)) {
-                              try {
-                                  val (_, rootDoc) = fetchHtml(rootUrl, ua, profile, finalUrl)
-                                  for (a in rootDoc.select("a[href]")) {
-                                      val h = a.absUrl("href")
-                                      if (h.startsWith("http")) tmpl.add(normUrl(h))
-                                  }
-                              } catch (e: Exception) { }
+                          if (needRootFetch) {
+                              val parsed = Uri.parse(finalUrl)
+                              val rootUrl = "${parsed.scheme ?: "https"}://${parsed.host ?: ""}/"
+                              if (normUrl(rootUrl) != normUrl(finalUrl)) {
+                                  try {
+                                      val (_, rootDoc) = fetchHtml(rootUrl, webUa, profile, finalUrl, cancelled)
+                                      for (a in rootDoc.select("a[href]")) {
+                                          val h = a.absUrl("href")
+                                          if (h.startsWith("http")) tmpl.add(normUrl(h))
+                                      }
+                                  } catch (e: Exception) { }
+                              }
                           }
                           if (cancelled.get()) return@Thread
 
@@ -1549,7 +1563,7 @@ jobs:
                                   dlg().setTitle(cleanName)
                                       .setMessage(msg.toString())
                                       .setPositiveButton("Download all") { _, _ ->
-                                          startFolderBatch(cleanName, finalUrl, res, ignore, ua, profile)
+                                          startFolderBatch(cleanName, finalUrl, res, ignore, webUa, profile)
                                       }
                                       .setNegativeButton("Cancel", null)
                                       .show()
@@ -1557,7 +1571,7 @@ jobs:
                                   dlg().setTitle(cleanName)
                                       .setMessage("$cleanName (${res.audios.size} songs) - Download all?")
                                       .setPositiveButton("Download all") { _, _ ->
-                                          enqueueAudioList(res.audios, cleanName, finalUrl, ua, profile, true)
+                                          enqueueAudioList(res.audios, cleanName, finalUrl, webUa, profile, true)
                                       }
                                       .setNegativeButton("Cancel", null)
                                       .show()
@@ -1572,15 +1586,132 @@ jobs:
                   }.start()
               }
 
-              private fun fetchHtml(url: String, ua: String?, profile: String, referer: String): Pair<String, Document> {
-                  val conn = openFollow(url, ua, 0L, profile, referer)
+              private fun isChallengeHtml(html: String): Boolean {
+                  val low = html.take(4000).lowercase(Locale.US)
+                  return low.contains("just a moment") || low.contains("cf-browser-verification") ||
+                      low.contains("challenge-platform") || low.contains("enable javascript and cookies")
+              }
+
+              private fun fetchHtml(
+                  url: String,
+                  ua: String?,
+                  profile: String,
+                  referer: String,
+                  cancelled: AtomicBoolean
+              ): Pair<String, Document> {
                   try {
-                      val finalUrl = conn.url.toString()
-                      val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                      return finalUrl to Jsoup.parse(html, finalUrl)
-                  } finally {
-                      conn.disconnect()
+                      val conn = openFollow(url, ua, 0L, profile, referer)
+                      try {
+                          val finalUrl = conn.url.toString()
+                          val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                          if (!isChallengeHtml(html)) {
+                              return finalUrl to Jsoup.parse(html, finalUrl)
+                          }
+                      } finally {
+                          conn.disconnect()
+                      }
+                  } catch (e: HttpCodeException) {
+                      if (e.code !in listOf(401, 403, 429, 503)) throw e
                   }
+                  if (cancelled.get()) throw Exception("Cancelled")
+                  return fetchHtmlViaWebView(url, profile, referer, cancelled)
+              }
+
+              @SuppressLint("SetJavaScriptEnabled")
+              private fun fetchHtmlViaWebView(
+                  url: String,
+                  profile: String,
+                  referer: String,
+                  cancelled: AtomicBoolean
+              ): Pair<String, Document> {
+                  val latch = CountDownLatch(1)
+                  val done = AtomicBoolean(false)
+                  var resUrl = url
+                  var resHtml = ""
+                  var resErr: String? = null
+                  val holder = arrayOfNulls<WebView>(1)
+                  val handler = Handler(Looper.getMainLooper())
+
+                  fun cleanup(wv: WebView?) {
+                      if (wv != null) {
+                          try { wv.stopLoading() } catch (e: Exception) { }
+                          try { wv.destroy() } catch (e: Exception) { }
+                      }
+                  }
+
+                  fun extract(wv: WebView, attempt: Int) {
+                      if (done.get() || cancelled.get()) {
+                          if (done.compareAndSet(false, true)) {
+                              cleanup(wv)
+                              latch.countDown()
+                          }
+                          return
+                      }
+                      val js = "(function(){return JSON.stringify({u:location.href,h:document.documentElement.outerHTML});})();"
+                      wv.evaluateJavascript(js) { raw ->
+                          if (done.get()) return@evaluateJavascript
+                          var u = url
+                          var h = ""
+                          try {
+                              val s = JSONTokener(raw).nextValue() as? String
+                              if (!s.isNullOrEmpty()) {
+                                  val o = JSONObject(s)
+                                  u = o.optString("u", url)
+                                  h = o.optString("h", "")
+                              }
+                          } catch (e: Exception) { }
+                          if ((h.length < 150 || isChallengeHtml(h)) && attempt < 6 && !cancelled.get()) {
+                              handler.postDelayed({ extract(wv, attempt + 1) }, 1200)
+                          } else {
+                              if (done.compareAndSet(false, true)) {
+                                  resUrl = u
+                                  resHtml = h
+                                  cleanup(wv)
+                                  latch.countDown()
+                              }
+                          }
+                      }
+                  }
+
+                  runOnUiThread {
+                      if (cancelled.get()) {
+                          done.set(true)
+                          latch.countDown()
+                          return@runOnUiThread
+                      }
+                      try {
+                          val wv = WebView(this@MainActivity)
+                          holder[0] = wv
+                          if (profile.isNotEmpty() && multiProfile) {
+                              try { WebViewCompat.setProfile(wv, profile) } catch (e: Exception) { }
+                          }
+                          applyWeb(wv)
+                          wv.webViewClient = object : WebViewClient() {
+                              override fun onPageFinished(view: WebView?, loadedUrl: String?) {
+                                  if (done.get()) return
+                                  handler.postDelayed({
+                                      if (!done.get() && view != null) extract(view, 0)
+                                  }, 350)
+                              }
+                          }
+                          if (referer.isNotEmpty()) wv.loadUrl(url, mapOf("Referer" to referer))
+                          else wv.loadUrl(url)
+                      } catch (e: Exception) {
+                          resErr = e.message ?: "WebView load error"
+                          done.set(true)
+                          latch.countDown()
+                      }
+                  }
+
+                  latch.await(25, TimeUnit.SECONDS)
+                  if (!done.get()) {
+                      done.set(true)
+                      runOnUiThread { cleanup(holder[0]) }
+                  }
+                  if (cancelled.get()) throw Exception("Cancelled")
+                  if (resErr != null) throw Exception(resErr)
+                  if (resHtml.isEmpty()) throw Exception("Could not load folder page")
+                  return resUrl to Jsoup.parse(resHtml, resUrl)
               }
 
               private fun extractRowTitle(row: Element?): String {
@@ -1758,6 +1889,7 @@ jobs:
                   if (firstRes.audios.isNotEmpty()) {
                       enqueueAudioList(firstRes.audios, rootFolder, rootUrl, ua, profile, false)
                   }
+                  val batchCancelled = AtomicBoolean(false)
                   Thread {
                       var queuedSongs = firstRes.audios.size
                       var scannedCount = 0
@@ -1774,7 +1906,7 @@ jobs:
                           if (!visited.add(nf)) continue
                           scannedCount++
                           try {
-                              val (subFinal, subDoc) = fetchHtml(folderLink.url, ua, profile, rootUrl)
+                              val (subFinal, subDoc) = fetchHtml(folderLink.url, ua, profile, rootUrl, batchCancelled)
                               visited.add(normUrl(subFinal))
                               val subRes = analyzePage(subDoc, subFinal, visited)
                               if (subRes.audios.isNotEmpty()) {
@@ -2719,7 +2851,8 @@ jobs:
                   page: String,
                   profile: String,
                   folderPath: String,
-                  expectAudio: Boolean
+                  expectAudio: Boolean,
+                  uaHint: String? = null
               ) {
                   val cleanTitle = sanitizeName(titleHint)
                   val rawName = URLUtil.guessFileName(url, null, if (expectAudio) "audio/mpeg" else null)
@@ -2736,7 +2869,7 @@ jobs:
                   d.link = url
                   d.page = page
                   d.profile = profile
-                  d.ua = if (desktop) DESKTOP_UA else MOBILE_UA
+                  d.ua = uaHint ?: currentWebUa()
                   d.name = finalName
                   d.folder = sanitizeFolder(folderPath)
                   d.customName = useCustom
@@ -2762,7 +2895,7 @@ jobs:
                   d.link = url
                   d.page = page
                   d.profile = profile
-                  d.ua = ua ?: MOBILE_UA
+                  d.ua = ua ?: currentWebUa()
                   d.name = finalName
                   d.customName = useCustom
                   d.expectAudio = isAudio
@@ -2802,7 +2935,7 @@ jobs:
                       }
                       if (code !in 200..299) {
                           c.disconnect()
-                          throw Exception("Server returned HTTP " + code)
+                          throw HttpCodeException(code)
                       }
                       return c
                   }
