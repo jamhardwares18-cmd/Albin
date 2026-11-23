@@ -132,6 +132,7 @@ jobs:
               implementation("io.github.junkfood02.youtubedl-android:library:0.17.2")
               implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.2")
               implementation("androidx.webkit:webkit:1.12.1")
+              implementation("org.jsoup:jsoup:1.17.2")
           }
           EOF_FILE
           mkdir -p app/src/main
@@ -372,13 +373,12 @@ jobs:
           import android.view.animation.AccelerateDecelerateInterpolator
           import android.view.inputmethod.InputMethodManager
           import android.webkit.CookieManager
-          import androidx.webkit.ProfileStore
-          import androidx.webkit.WebViewCompat
-          import androidx.webkit.WebViewFeature
+          import android.webkit.JavascriptInterface
           import android.webkit.MimeTypeMap
           import android.webkit.URLUtil
           import android.webkit.ValueCallback
           import android.webkit.WebChromeClient
+          import android.webkit.WebResourceRequest
           import android.webkit.WebSettings
           import android.webkit.WebView
           import android.webkit.WebViewClient
@@ -386,25 +386,33 @@ jobs:
           import android.widget.EditText
           import android.widget.FrameLayout
           import android.widget.GridView
-          import android.widget.ImageView
           import android.widget.ImageButton
+          import android.widget.ImageView
           import android.widget.LinearLayout
           import android.widget.ListView
           import android.widget.PopupMenu
           import android.widget.ProgressBar
           import android.widget.TextView
           import android.widget.Toast
+          import androidx.webkit.ProfileStore
+          import androidx.webkit.WebViewCompat
+          import androidx.webkit.WebViewFeature
           import com.yausername.ffmpeg.FFmpeg
           import com.yausername.youtubedl_android.YoutubeDL
           import com.yausername.youtubedl_android.YoutubeDLRequest
           import org.json.JSONArray
           import org.json.JSONObject
+          import org.json.JSONTokener
+          import org.jsoup.Jsoup
+          import org.jsoup.nodes.Document
           import java.io.File
           import java.io.FileOutputStream
           import java.net.HttpURLConnection
           import java.net.URL
           import java.util.Locale
           import java.util.concurrent.Executors
+          import java.util.concurrent.atomic.AtomicBoolean
+          import java.util.concurrent.atomic.AtomicLong
           import kotlin.math.abs
 
           class Pal(val bg: Int, val pill: Int, val card: Int, val text: Int, val sec: Int, val stroke: Int)
@@ -439,11 +447,23 @@ jobs:
               var qkey = ""
               var qtag = ""
               var profile = ""   // tab profile whose cookies this download may use
+              var folder = ""    // relative subfolder e.g. "Star Hits/Ajith Hits"
+              var customName = false
+              var expectAudio = false
           }
 
           class Q(val label: String, val fmt: String, val audio: Boolean, val bytes: Long, val key: String, val tag: String)
+          class FoundLink(val url: String, val name: String)
+          class ScanResult(val audios: List<FoundLink>, val folders: List<FoundLink>)
 
           val SIZE_RE = Regex("([0-9.]+)%\\s+of\\s+~?\\s*([0-9.]+\\s*[KMGT]?i?B)")
+          val AUDIO_EXTS = setOf("mp3", "m4a", "flac", "wav", "aac", "ogg", "opus")
+          val SKIP_EXTS = setOf("jpg", "jpeg", "png", "gif", "webp", "svg", "css", "js", "ico", "xml", "pdf", "zip", "rar", "7z", "apk", "exe", "txt")
+          val SKIP_WORDS = setOf(
+              "home", "chat", "forum", "login", "sign in", "signin", "register", "signup", "search",
+              "contact", "about", "privacy", "terms", "dmca", "policy", "faq", "help", "next", "prev",
+              "previous", "back", "top", "more", "share", "rss", "feed", "menu", "categories"
+          )
 
           class MainActivity : Activity() {
 
@@ -460,10 +480,15 @@ jobs:
               private var col = DARK
               private var barsHidden = false
               private var lastBarToggle = 0L
+              @Volatile private var pendingClickName = ""
+              @Volatile private var pendingClickTime = 0L
+              private val lastUiUpdate = AtomicLong(0L)
+              private val saveLock = Any()
               private var customView: View? = null
               private var customCb: WebChromeClient.CustomViewCallback? = null
               private var fileCb: ValueCallback<Array<Uri>>? = null
               private val exec = Executors.newSingleThreadExecutor()
+              private val directExec = Executors.newFixedThreadPool(3)
               private val prefs by lazy { getSharedPreferences("s", MODE_PRIVATE) }
 
               private lateinit var topBar: View
@@ -659,6 +684,42 @@ jobs:
                   return g
               }
 
+              private fun sanitizeName(s: String): String =
+                  s.replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]+"), " ").replace(Regex("\\s+"), " ").trim().take(120)
+
+              private fun sanitizeFolder(f: String): String =
+                  f.split("/").map { sanitizeName(it) }.filter { it.isNotEmpty() && it != "." && it != ".." }.joinToString("/")
+
+              private fun urlExt(u: String): String {
+                  val path = u.substringBefore('#').substringBefore('?')
+                  val seg = path.substringAfterLast('/', "")
+                  return if (seg.contains('.')) seg.substringAfterLast('.').lowercase(Locale.US) else ""
+              }
+
+              private fun isAudioUrl(u: String): Boolean = urlExt(u) in AUDIO_EXTS
+
+              private fun normUrl(u: String): String {
+                  val clean = u.substringBefore('#').trim()
+                  val uri = Uri.parse(clean)
+                  val host = (uri.host ?: "").lowercase(Locale.US).removePrefix("www.")
+                  val scheme = (uri.scheme ?: "https").lowercase(Locale.US)
+                  val path = (uri.path ?: "").let { if (it.length > 1) it.trimEnd('/') else it }
+                  val q = uri.encodedQuery
+                  return "$scheme://$host$path" + (if (!q.isNullOrEmpty()) "?$q" else "")
+              }
+
+              private fun sameHost(a: String, b: String): Boolean {
+                  val ha = (Uri.parse(a).host ?: "").lowercase(Locale.US).removePrefix("www.")
+                  val hb = (Uri.parse(b).host ?: "").lowercase(Locale.US).removePrefix("www.")
+                  return ha.isNotEmpty() && ha == hb
+              }
+
+              private fun guessNameFromUrl(u: String): String {
+                  val seg = Uri.parse(u).lastPathSegment ?: "Folder"
+                  val base = seg.substringBeforeLast('.')
+                  return sanitizeName(Uri.decode(base).replace('_', ' ').replace('-', ' ')).ifEmpty { "Folder" }
+              }
+
               // ---------- orientation & landscape scroll bars ----------
 
               private fun applyOrientation() {
@@ -751,6 +812,151 @@ jobs:
                   }
               }
 
+              // ---------- JS bridge for direct MP3 clicks ----------
+
+              inner class JsBridge(private val profile: String) {
+                  @JavascriptInterface
+                  fun onAudioLink(url: String, title: String) {
+                      if (url.isBlank()) return
+                      runOnUiThread {
+                          val page = tabs.find { it.profile == profile }?.web?.url ?: url
+                          startDirectNamed(url, title, page, profile, "", true)
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun setPendingName(title: String) {
+                      val clean = sanitizeName(title)
+                      if (clean.isNotEmpty()) {
+                          pendingClickName = clean
+                          pendingClickTime = System.currentTimeMillis()
+                      }
+                  }
+              }
+
+              private fun injectSiteHelper(w: WebView?) {
+                  if (w == null) return
+                  val js = """
+                  (function(){
+                    if (window.__abhHooked) return;
+                    window.__abhHooked = true;
+                    function isAudioHref(h) {
+                      if (!h) return false;
+                      var p = h.split('#')[0].split('?')[0].toLowerCase();
+                      return /\.(mp3|m4a|flac|wav|aac|ogg|opus)$/.test(p);
+                    }
+                    function isDlHref(h) {
+                      if (!h) return false;
+                      var l = h.toLowerCase();
+                      return isAudioHref(h) || l.indexOf('download') >= 0 || l.indexOf('dl=') >= 0 || l.indexOf('file=') >= 0;
+                    }
+                    function isPlayElem(el) {
+                      if (!el) return false;
+                      var s = ((el.alt||'') + ' ' + (el.title||'') + ' ' + (el.className||'') + ' ' + (el.id||'') + ' ' + (el.src||'')).toLowerCase();
+                      return s.indexOf('play') >= 0 && s.indexOf('down') < 0 && s.indexOf('dl') < 0;
+                    }
+                    function rowTitle(row, skipA) {
+                      if (!row) return '';
+                      var as = row.querySelectorAll('a');
+                      var best = '';
+                      for (var i = 0; i < as.length; i++) {
+                        if (as[i] === skipA) continue;
+                        var txt = (as[i].innerText || as[i].textContent || '').trim();
+                        if (txt.length > best.length) best = txt;
+                      }
+                      if (best) return best;
+                      var full = (row.innerText || row.textContent || '').trim();
+                      return full.split('\n')[0].trim();
+                    }
+                    function findMp3InAttr(el) {
+                      if (!el) return '';
+                      var attrs = ['data-src','data-url','data-file','data-mp3','data-audio','onclick'];
+                      for (var i = 0; i < attrs.length; i++) {
+                        var v = el.getAttribute(attrs[i]) || '';
+                        var m = v.match(/https?:\/\/[^'"\s)]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"\s)]*)?/i);
+                        if (m) return m[0];
+                        var m2 = v.match(/['"]([^'"]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"]*)?)['"]/i);
+                        if (m2) {
+                          try { return new URL(m2[1], location.href).href; } catch(e) {}
+                        }
+                      }
+                      return '';
+                    }
+                    document.addEventListener('touchstart', function(e) {
+                      var a = e.target && e.target.closest ? e.target.closest('a') : null;
+                      if (a && a.href) {
+                        window.__abhLastUrl = a.href;
+                        window.__abhLastText = (a.innerText || a.textContent || a.title || '').trim();
+                      } else {
+                        window.__abhLastUrl = '';
+                        window.__abhLastText = '';
+                      }
+                    }, true);
+                    document.addEventListener('click', function(e) {
+                      var t = e.target;
+                      if (!t || !t.closest) return;
+                      if (isPlayElem(t)) return;
+                      var a = t.closest('a');
+                      if (a && isPlayElem(a)) return;
+                      if (a && a.href) {
+                        var txt = (a.innerText || a.textContent || a.title || '').trim();
+                        if (isAudioHref(a.href)) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          ABH.onAudioLink(a.href, txt);
+                          return;
+                        }
+                        var row = a.closest('tr, li');
+                        if (row) {
+                          var links = row.querySelectorAll('a');
+                          if (links.length <= 6) {
+                            var rowName = txt || rowTitle(row, null);
+                            var embedded = findMp3InAttr(a) || findMp3InAttr(t);
+                            if (embedded) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              ABH.onAudioLink(embedded, rowName);
+                              return;
+                            }
+                            var hrefL = (a.getAttribute('href') || '').trim().toLowerCase();
+                            var isScriptOrHash = !hrefL || hrefL === '#' || hrefL.indexOf('javascript:') === 0 || hrefL.indexOf('play') >= 0;
+                            var hasDlSib = null;
+                            for (var i = 0; i < links.length; i++) {
+                              var sib = links[i];
+                              if (sib === a) continue;
+                              var img = sib.querySelector('img');
+                              var imgHint = img ? ((img.src||'') + ' ' + (img.alt||'') + ' ' + (img.title||'')).toLowerCase() : '';
+                              if (sib.href && (isDlHref(sib.href) || imgHint.indexOf('dl') >= 0 || imgHint.indexOf('down') >= 0)) {
+                                hasDlSib = sib;
+                                break;
+                              }
+                            }
+                            if (hasDlSib && (isScriptOrHash || row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(hasDlSib.href))) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              ABH.onAudioLink(hasDlSib.href, rowName);
+                              return;
+                            }
+                            if (rowName) ABH.setPendingName(rowName);
+                          }
+                        }
+                        if (txt) ABH.setPendingName(txt);
+                      } else {
+                        var mp3 = findMp3InAttr(t);
+                        if (mp3) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          var row2 = t.closest('tr, li');
+                          var name2 = (t.innerText || t.textContent || '').trim() || rowTitle(row2, null);
+                          ABH.onAudioLink(mp3, name2);
+                        }
+                      }
+                    }, true);
+                  })();
+                  """.trimIndent()
+                  w.evaluateJavascript(js, null)
+              }
+
               // ---------- tabs & web ----------
 
               private fun applyWeb(w: WebView) {
@@ -794,6 +1000,7 @@ jobs:
                   }
                   val pf = pname
                   applyWeb(w)
+                  w.addJavascriptInterface(JsBridge(pf), "ABH")
                   var touchLastY = 0f
                   var scrollAcc = 0f
                   w.setOnTouchListener { _, ev ->
@@ -839,7 +1046,6 @@ jobs:
                           (t == WebView.HitTestResult.SRC_ANCHOR_TYPE || t == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE ||
                               t == WebView.HitTestResult.IMAGE_TYPE)
                       ) {
-                          // A link to a video, or (for a thumbnail) the thumbnail picture address, which contains the video id.
                           if (isYt(ex)) vid = ytId(ex)
                           if (vid.isEmpty()) {
                               val m = Regex("/(?:vi|vi_webp|an_webp)/([A-Za-z0-9_-]{11})/").find(ex)
@@ -849,6 +1055,32 @@ jobs:
                       if (vid.isNotEmpty()) {
                           longPressVideo("https://www.youtube.com/watch?v=" + vid)
                           true
+                      } else if (ex != null && (ex.startsWith("http://") || ex.startsWith("https://")) &&
+                          (t == WebView.HitTestResult.SRC_ANCHOR_TYPE || t == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE)
+                      ) {
+                          val infoJs = "(function(){var as=document.querySelectorAll('a[href]');var ls=[];" +
+                              "for(var i=0;i<as.length;i++){var h=as[i].href;if(h&&h.indexOf('http')===0)ls.push(h.split('#')[0]);}" +
+                              "return JSON.stringify({t:window.__abhLastText||'',u:window.__abhLastUrl||'',links:ls});})();"
+                          val pageUrl = w.url ?: ""
+                          w.evaluateJavascript(infoJs) { raw ->
+                              var linkText = ""
+                              val pageLinks = HashSet<String>()
+                              try {
+                                  val jsStr = JSONTokener(raw).nextValue() as? String
+                                  if (!jsStr.isNullOrEmpty()) {
+                                      val o = JSONObject(jsStr)
+                                      if (o.optString("u").isEmpty() || normUrl(o.optString("u")) == normUrl(ex)) {
+                                          linkText = o.optString("t", "")
+                                      }
+                                      val arr = o.optJSONArray("links")
+                                      if (arr != null) {
+                                          for (i in 0 until arr.length()) pageLinks.add(normUrl(arr.getString(i)))
+                                      }
+                                  }
+                              } catch (e: Exception) { }
+                              handleLongPressLink(ex, linkText, pageUrl, pageLinks, pf)
+                          }
+                          true
                       } else {
                           false
                       }
@@ -857,17 +1089,30 @@ jobs:
                       startDirect(url, userAgent, contentDisposition, mimetype, w.url ?: url, pf)
                   }
                   w.webViewClient = object : WebViewClient() {
+                      override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                          val u = request?.url?.toString() ?: return false
+                          if (isAudioUrl(u)) {
+                              val titleHint = if (System.currentTimeMillis() - pendingClickTime < 5000) pendingClickName else ""
+                              startDirectNamed(u, titleHint, view?.url ?: u, pf, "", true)
+                              return true
+                          }
+                          return false
+                      }
+
                       override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
                           if (view != null && tabs.getOrNull(cur)?.web == view && url != null) urlBox.setText(url)
                           forceDesktopViewport(view)
+                          injectSiteHelper(view)
                       }
 
                       override fun onPageCommitVisible(view: WebView?, url: String?) {
                           forceDesktopViewport(view)
+                          injectSiteHelper(view)
                       }
 
                       override fun onPageFinished(view: WebView?, url: String?) {
                           forceDesktopViewport(view)
+                          injectSiteHelper(view)
                       }
                   }
                   w.webChromeClient = object : WebChromeClient() {
@@ -1101,6 +1346,318 @@ jobs:
                           hidePages()
                       }
                       return card
+                  }
+              }
+
+              // ---------- folder & MP3 scanner (works across sites) ----------
+
+              private fun handleLongPressLink(
+                  url: String,
+                  linkText: String,
+                  sourceUrl: String,
+                  sourceLinks: Set<String>,
+                  profile: String
+              ) {
+                  val cleanName = sanitizeName(linkText).ifEmpty { guessNameFromUrl(url) }
+                  if (isAudioUrl(url)) {
+                      dlg().setTitle(cleanName)
+                          .setMessage("Download this audio file?")
+                          .setPositiveButton("Download") { _, _ ->
+                              startDirectNamed(url, cleanName, sourceUrl, profile, "", true)
+                          }
+                          .setNegativeButton("Cancel", null)
+                          .show()
+                      return
+                  }
+                  val cancelled = AtomicBoolean(false)
+                  val wait = dlg().setTitle(cleanName)
+                      .setMessage("Scanning folder & songs...")
+                      .setCancelable(true)
+                      .setOnCancelListener { cancelled.set(true) }
+                      .show()
+                  val ua = if (desktop) DESKTOP_UA else null
+                  Thread {
+                      try {
+                          var tmpl = sourceLinks
+                          if (sourceUrl.isNotEmpty() && normUrl(url) == normUrl(sourceUrl)) {
+                              val parsed = Uri.parse(url)
+                              val rootUrl = "${parsed.scheme ?: "https"}://${parsed.host ?: ""}/"
+                              if (normUrl(rootUrl) != normUrl(url)) {
+                                  try {
+                                      val (_, rootDoc) = fetchHtml(rootUrl, ua, profile, sourceUrl)
+                                      val rootSet = HashSet<String>()
+                                      for (a in rootDoc.select("a[href]")) {
+                                          val h = a.absUrl("href")
+                                          if (h.startsWith("http")) rootSet.add(normUrl(h))
+                                      }
+                                      tmpl = rootSet
+                                  } catch (e: Exception) { }
+                              }
+                          }
+                          if (cancelled.get()) return@Thread
+                          val (finalUrl, doc) = fetchHtml(url, ua, profile, sourceUrl)
+                          if (cancelled.get()) return@Thread
+                          val res = analyzePage(doc, finalUrl, tmpl + setOf(normUrl(sourceUrl), normUrl(finalUrl)))
+                          runOnUiThread {
+                              if (cancelled.get() || !wait.isShowing) return@runOnUiThread
+                              wait.dismiss()
+                              if (res.audios.isEmpty() && res.folders.isEmpty()) {
+                                  toast("No MP3 files or subfolders found in $cleanName")
+                              } else if (res.folders.isNotEmpty()) {
+                                  val msg = StringBuilder("$cleanName (${res.folders.size} folders")
+                                  if (res.audios.isNotEmpty()) msg.append(", ${res.audios.size} songs")
+                                  msg.append(") - Download all?")
+                                  dlg().setTitle(cleanName)
+                                      .setMessage(msg.toString())
+                                      .setPositiveButton("Download all") { _, _ ->
+                                          startFolderBatch(cleanName, finalUrl, res, tmpl, ua, profile)
+                                      }
+                                      .setNegativeButton("Cancel", null)
+                                      .show()
+                              } else {
+                                  dlg().setTitle(cleanName)
+                                      .setMessage("$cleanName (${res.audios.size} songs) - Download all?")
+                                      .setPositiveButton("Download all") { _, _ ->
+                                          enqueueAudioList(res.audios, cleanName, finalUrl, ua, profile, true)
+                                      }
+                                      .setNegativeButton("Cancel", null)
+                                      .show()
+                              }
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              if (wait.isShowing) wait.dismiss()
+                              if (!cancelled.get()) toast("Could not scan folder: ${e.message}")
+                          }
+                      }
+                  }.start()
+              }
+
+              private fun fetchHtml(url: String, ua: String?, profile: String, referer: String): Pair<String, Document> {
+                  val conn = openFollow(url, ua, 0L, profile, referer)
+                  try {
+                      val finalUrl = conn.url.toString()
+                      val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                      return finalUrl to Jsoup.parse(html, finalUrl)
+                  } finally {
+                      conn.disconnect()
+                  }
+              }
+
+              private fun analyzePage(doc: Document, baseUrl: String, ignoreUrls: Set<String>): ScanResult {
+                  val audios = mutableListOf<FoundLink>()
+                  val seenAudio = HashSet<String>()
+
+                  fun addAudio(rawUrl: String, rawTitle: String) {
+                      val u = rawUrl.substringBefore('#').trim()
+                      if (!u.startsWith("http")) return
+                      val nu = normUrl(u)
+                      if (!seenAudio.add(nu)) return
+                      val title = sanitizeName(rawTitle).ifEmpty { guessNameFromUrl(u) }
+                      audios.add(FoundLink(u, title))
+                  }
+
+                  // 1. Direct audio links
+                  for (a in doc.select("a[href]")) {
+                      val h = a.absUrl("href").substringBefore('#').trim()
+                      if (!h.startsWith("http") || !isAudioUrl(h)) continue
+                      var t = a.text().trim()
+                      if (t.isEmpty()) {
+                          val row = a.closest("tr, li")
+                          if (row != null) {
+                              for (ra in row.select("a")) {
+                                  val rt = ra.text().trim()
+                                  if (rt.length > t.length) t = rt
+                              }
+                          }
+                      }
+                      addAudio(h, t)
+                  }
+
+                  // 2. <audio> / <source> tags
+                  for (el in doc.select("audio[src], source[src]")) {
+                      val h = el.absUrl("src")
+                      if (isAudioUrl(h)) addAudio(h, "")
+                  }
+
+                  // 3. Embedded audio URLs in onclick / data-* attributes
+                  val mp3Re = Regex("https?://[^'\"\\s)]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"\\s)]*)?", RegexOption.IGNORE_CASE)
+                  val relMp3Re = Regex("['\"]([^'\"]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"]*)?)['\"]", RegexOption.IGNORE_CASE)
+                  for (el in doc.select("[onclick], [data-src], [data-url], [data-file], [data-mp3]")) {
+                      val row = el.closest("tr, li")
+                      val title = (el.text().trim().ifEmpty { row?.select("a")?.maxByOrNull { it.text().length }?.text()?.trim() ?: "" })
+                      for (attr in listOf("data-src", "data-url", "data-file", "data-mp3", "onclick")) {
+                          val v = el.attr(attr)
+                          if (v.isEmpty()) continue
+                          val m = mp3Re.find(v)
+                          if (m != null) {
+                              addAudio(m.value, title)
+                          } else {
+                              val m2 = relMp3Re.find(v)
+                              if (m2 != null) {
+                                  try {
+                                      val abs = URL(URL(baseUrl), m2.groupValues[1]).toString()
+                                      addAudio(abs, title)
+                                  } catch (e: Exception) { }
+                              }
+                          }
+                      }
+                  }
+
+                  // 4. Song rows with download-icon links (e.g. download.php?id=... in <tr>/<li>)
+                  for (row in doc.select("tr, li")) {
+                      val links = row.select("a[href]")
+                      if (links.isEmpty() || links.size > 6) continue
+                      var dlHref = ""
+                      var bestTitle = ""
+                      var hasAudioInRow = false
+                      for (la in links) {
+                          val h = la.absUrl("href").substringBefore('#').trim()
+                          if (normUrl(h) in seenAudio) { hasAudioInRow = true; break }
+                          val lt = la.text().trim()
+                          if (lt.length > bestTitle.length) bestTitle = lt
+                          if (dlHref.isEmpty() && h.startsWith("http") && sameHost(h, baseUrl)) {
+                              val img = la.selectFirst("img")
+                              val hint = ((img?.attr("src") ?: "") + " " + (img?.attr("alt") ?: "") + " " +
+                                  (img?.attr("title") ?: "") + " " + la.attr("title")).lowercase(Locale.US)
+                              val hl = h.lowercase(Locale.US)
+                              if (hl.contains("download") || hl.contains("dl=") || hl.contains("file=") ||
+                                  hint.contains("dl") || hint.contains("down")
+                              ) {
+                                  dlHref = h
+                              }
+                          }
+                      }
+                      if (!hasAudioInRow && dlHref.isNotEmpty() && bestTitle.isNotEmpty()) {
+                          addAudio(dlHref, bestTitle)
+                      }
+                  }
+
+                  // 5. Subfolder links (exclude nav/header/footer, template/sidebar links, utility links, images/assets)
+                  val folders = mutableListOf<FoundLink>()
+                  val seenFolders = HashSet<String>()
+                  for (a in doc.select("a[href]")) {
+                      if (a.closest("header, nav, footer") != null) continue
+                      val h = a.absUrl("href").substringBefore('#').trim()
+                      if (!h.startsWith("http") || !sameHost(h, baseUrl)) continue
+                      val ext = urlExt(h)
+                      if (ext in AUDIO_EXTS || ext in SKIP_EXTS) continue
+                      val nu = normUrl(h)
+                      if (nu in ignoreUrls || nu in seenAudio || nu in seenFolders) continue
+                      val label = sanitizeName(
+                          a.text().trim()
+                              .ifEmpty { a.attr("title").trim() }
+                              .ifEmpty { a.selectFirst("img")?.attr("alt")?.trim() ?: "" }
+                      )
+                      if (label.length <= 1) continue
+                      val low = label.lowercase(Locale.US)
+                      if (low in SKIP_WORDS) continue
+                      val pathLow = (Uri.parse(h).path ?: "").lowercase(Locale.US)
+                      if (pathLow.endsWith("/login") || pathLow.endsWith("/register") || pathLow.endsWith("/search") ||
+                          pathLow.endsWith("/chat") || pathLow.endsWith("/forum")
+                      ) continue
+                      seenFolders.add(nu)
+                      folders.add(FoundLink(h, label))
+                  }
+
+                  return ScanResult(audios, folders)
+              }
+
+              private fun startFolderBatch(
+                  rootFolder: String,
+                  rootUrl: String,
+                  firstRes: ScanResult,
+                  templateLinks: Set<String>,
+                  ua: String?,
+                  profile: String
+              ) {
+                  toast("Scanning ${firstRes.folders.size} folders & starting downloads...")
+                  dlTab = 0
+                  flyToDownload()
+                  if (firstRes.audios.isNotEmpty()) {
+                      enqueueAudioList(firstRes.audios, rootFolder, rootUrl, ua, profile, false)
+                  }
+                  Thread {
+                      var queuedSongs = firstRes.audios.size
+                      var scannedCount = 0
+                      val visited = HashSet<String>(templateLinks)
+                      visited.add(normUrl(rootUrl))
+                      val queue = ArrayDeque<Pair<FoundLink, String>>()
+                      for (sf in firstRes.folders) {
+                          queue.addLast(sf to sanitizeFolder("$rootFolder/${sf.name}"))
+                      }
+                      while (queue.isNotEmpty() && scannedCount < 200 && queuedSongs < 2000) {
+                          val (folderLink, folderPath) = queue.removeFirst()
+                          val nf = normUrl(folderLink.url)
+                          if (!visited.add(nf)) continue
+                          scannedCount++
+                          try {
+                              val (subFinal, subDoc) = fetchHtml(folderLink.url, ua, profile, rootUrl)
+                              visited.add(normUrl(subFinal))
+                              val subRes = analyzePage(subDoc, subFinal, visited)
+                              if (subRes.audios.isNotEmpty()) {
+                                  queuedSongs += subRes.audios.size
+                                  runOnUiThread {
+                                      enqueueAudioList(subRes.audios, folderPath, subFinal, ua, profile, false)
+                                  }
+                              } else if (subRes.folders.isNotEmpty()) {
+                                  val depth = folderPath.count { it == '/' }
+                                  if (depth < 2) {
+                                      for (sub2 in subRes.folders) {
+                                          if (normUrl(sub2.url) !in visited) {
+                                              queue.addLast(sub2 to sanitizeFolder("$folderPath/${sub2.name}"))
+                                          }
+                                      }
+                                  }
+                              }
+                          } catch (e: Exception) { }
+                      }
+                      runOnUiThread {
+                          toast("Queued $queuedSongs songs in $rootFolder")
+                      }
+                  }.start()
+              }
+
+              private fun enqueueAudioList(
+                  audios: List<FoundLink>,
+                  folderPath: String,
+                  pageUrl: String,
+                  ua: String?,
+                  profile: String,
+                  animate: Boolean
+              ) {
+                  if (audios.isEmpty()) return
+                  val cleanFolder = sanitizeFolder(folderPath)
+                  val toRun = mutableListOf<DlItem>()
+                  for (a in audios) {
+                      val ext = urlExt(a.url).let { if (it in AUDIO_EXTS) ".$it" else ".mp3" }
+                      val cleanTitle = sanitizeName(a.name).ifEmpty { "Track" }
+                      val d = DlItem(cleanTitle, 0, 0, null, null, "")
+                      d.kind = 1
+                      d.link = a.url
+                      d.page = pageUrl
+                      d.profile = profile
+                      d.ua = ua
+                      d.name = cleanTitle + ext
+                      d.folder = cleanFolder
+                      d.customName = true
+                      d.expectAudio = true
+                      items.add(0, d)
+                      toRun.add(d)
+                  }
+                  dlTab = 0
+                  if (animate) {
+                      flyToDownload()
+                      toast("Added ${audios.size} songs to Downloads")
+                  }
+                  saveItems()
+                  refreshDl()
+                  for (d in toRun) {
+                      d.stop = 0
+                      d.state = 0
+                      d.gen++
+                      val g = d.gen
+                      directExec.execute { runDirect(d, g) }
                   }
               }
 
@@ -1518,7 +2075,7 @@ jobs:
                   val cf = File(cacheDir, "cookies_q.txt")
                   val pid = "q" + System.nanoTime()
                   qPid = pid
-                  val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+                  val finished = AtomicBoolean(false)
                   Thread {
                       try { Thread.sleep(30000) } catch (e: Exception) { }
                       if (!finished.get()) {
@@ -1607,7 +2164,7 @@ jobs:
                       val ck = cookieText(d.link, d.profile)
                       exec.execute { runDownload(d, ck, g) }
                   } else {
-                      Thread { runDirect(d, g) }.start()
+                      directExec.execute { runDirect(d, g) }
                   }
               }
 
@@ -1675,12 +2232,18 @@ jobs:
                   return sb.toString()
               }
 
-              private fun ui() = runOnUiThread { refreshDl() }
+              private fun ui() {
+                  val now = System.currentTimeMillis()
+                  val prev = lastUiUpdate.get()
+                  if (now - prev >= 300 && lastUiUpdate.compareAndSet(prev, now)) {
+                      runOnUiThread { refreshDl() }
+                  }
+              }
 
               private fun runDownload(d: DlItem, cookies: String?, g: Int) {
                   if (d.stop != 0 || d.gen != g) return
                   d.state = 1
-                  ui()
+                  runOnUiThread { refreshDl() }
                   val dir = File(filesDir, "parts/" + d.id)
                   val cf = File(cacheDir, "cookies" + d.id + ".txt")
                   try {
@@ -1739,72 +2302,118 @@ jobs:
                   }
               }
 
-              private fun saveFile(d: DlItem, f: File) {
-                  val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase())
-                      ?: "application/octet-stream"
-                  var uri: Uri? = null
-                  val tree = prefs.getString("folder", "") ?: ""
-                  if (tree.isNotEmpty()) {
-                      try {
-                          deleteExisting(f.name, tree)
-                          val t = Uri.parse(tree)
-                          val parent = DocumentsContract.buildDocumentUriUsingTree(t, DocumentsContract.getTreeDocumentId(t))
-                          uri = DocumentsContract.createDocument(contentResolver, parent, mime, f.name)
-                      } catch (e: Exception) {
-                          uri = null
-                      }
-                  }
-                  if (uri == null) {
-                      deleteExisting(f.name, "")
-                      val values = ContentValues().apply {
-                          put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
-                          put(MediaStore.MediaColumns.MIME_TYPE, mime)
-                          put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                      }
-                      uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                  }
-                  val u = uri ?: throw Exception("Could not create file in the download folder")
-                  contentResolver.openOutputStream(u)?.use { out ->
-                      f.inputStream().use { it.copyTo(out) }
-                  }
-                  d.uri = u.toString()
-                  d.mime = mime
-                  d.name = f.name
-              }
-
-              // Same file name downloaded again: delete the old file so the new one replaces it.
-              private fun deleteExisting(name: String, tree: String) {
-                  try {
-                      if (tree.isNotEmpty()) {
-                          val t = Uri.parse(tree)
-                          val children = DocumentsContract.buildChildDocumentsUriUsingTree(t, DocumentsContract.getTreeDocumentId(t))
-                          val ids = mutableListOf<String>()
-                          contentResolver.query(
-                              children,
-                              arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-                              null, null, null
-                          )?.use { c ->
-                              while (c.moveToNext()) {
-                                  if (c.getString(1) == name) ids.add(c.getString(0))
+              private fun ensureSafDir(rootTree: Uri, relFolder: String): Uri? {
+                  var curId = DocumentsContract.getTreeDocumentId(rootTree)
+                  var curUri = DocumentsContract.buildDocumentUriUsingTree(rootTree, curId)
+                  for (seg in relFolder.split("/").filter { it.isNotEmpty() }) {
+                      val children = DocumentsContract.buildChildDocumentsUriUsingTree(rootTree, curId)
+                      var foundId: String? = null
+                      contentResolver.query(
+                          children,
+                          arrayOf(
+                              DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                              DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                              DocumentsContract.Document.COLUMN_MIME_TYPE
+                          ),
+                          null, null, null
+                      )?.use { c ->
+                          while (c.moveToNext()) {
+                              if (c.getString(1) == seg && c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
+                                  foundId = c.getString(0)
+                                  break
                               }
                           }
-                          for (id in ids) {
-                              DocumentsContract.deleteDocument(contentResolver, DocumentsContract.buildDocumentUriUsingTree(t, id))
-                          }
-                      } else {
-                          val base = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                          val rows = mutableListOf<Long>()
-                          contentResolver.query(
-                              base,
-                              arrayOf(MediaStore.MediaColumns._ID),
-                              MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + "=?",
-                              arrayOf(name, Environment.DIRECTORY_DOWNLOADS + "/"),
-                              null
-                          )?.use { c ->
-                              while (c.moveToNext()) rows.add(c.getLong(0))
-                          }
-                          for (id in rows) contentResolver.delete(ContentUris.withAppendedId(base, id), null, null)
                       }
+                      if (foundId != null) {
+                          curId = foundId!!
+                          curUri = DocumentsContract.buildDocumentUriUsingTree(rootTree, curId)
+                      } else {
+                          curUri = DocumentsContract.createDocument(
+                              contentResolver, curUri, DocumentsContract.Document.MIME_TYPE_DIR, seg
+                          ) ?: return null
+                          curId = DocumentsContract.getDocumentId(curUri)
+                      }
+                  }
+                  return curUri
+              }
+
+              private fun saveFile(d: DlItem, f: File) {
+                  synchronized(saveLock) {
+                      val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase())
+                          ?: "application/octet-stream"
+                      val cleanFolder = sanitizeFolder(d.folder)
+                      var uri: Uri? = null
+                      val tree = prefs.getString("folder", "") ?: ""
+                      if (tree.isNotEmpty()) {
+                          try {
+                              val t = Uri.parse(tree)
+                              val parent = if (cleanFolder.isEmpty()) {
+                                  DocumentsContract.buildDocumentUriUsingTree(t, DocumentsContract.getTreeDocumentId(t))
+                              } else {
+                                  ensureSafDir(t, cleanFolder)
+                              }
+                              if (parent != null) {
+                                  deleteExistingSaf(f.name, t, DocumentsContract.getDocumentId(parent))
+                                  uri = DocumentsContract.createDocument(contentResolver, parent, mime, f.name)
+                              }
+                          } catch (e: Exception) {
+                              uri = null
+                          }
+                      }
+                      if (uri == null) {
+                          val rel = if (cleanFolder.isEmpty()) Environment.DIRECTORY_DOWNLOADS
+                          else Environment.DIRECTORY_DOWNLOADS + "/" + cleanFolder
+                          deleteExistingMedia(f.name, rel)
+                          val values = ContentValues().apply {
+                              put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
+                              put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                              put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
+                          }
+                          uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                      }
+                      val u = uri ?: throw Exception("Could not create file in the download folder")
+                      contentResolver.openOutputStream(u)?.use { out ->
+                          f.inputStream().use { it.copyTo(out) }
+                      }
+                      d.uri = u.toString()
+                      d.mime = mime
+                      d.name = f.name
+                  }
+              }
+
+              private fun deleteExistingSaf(name: String, tree: Uri, parentDocId: String) {
+                  try {
+                      val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId)
+                      val ids = mutableListOf<String>()
+                      contentResolver.query(
+                          children,
+                          arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                          null, null, null
+                      )?.use { c ->
+                          while (c.moveToNext()) {
+                              if (c.getString(1) == name) ids.add(c.getString(0))
+                          }
+                      }
+                      for (id in ids) {
+                          DocumentsContract.deleteDocument(contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, id))
+                      }
+                  } catch (e: Exception) { }
+              }
+
+              private fun deleteExistingMedia(name: String, relPath: String) {
+                  try {
+                      val base = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                      val rows = mutableListOf<Long>()
+                      contentResolver.query(
+                          base,
+                          arrayOf(MediaStore.MediaColumns._ID),
+                          MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                          arrayOf(name, relPath + "/"),
+                          null
+                      )?.use { c ->
+                          while (c.moveToNext()) rows.add(c.getLong(0))
+                      }
+                      for (id in rows) contentResolver.delete(ContentUris.withAppendedId(base, id), null, null)
                   } catch (e: Exception) { }
               }
 
@@ -1829,7 +2438,7 @@ jobs:
               }
 
               private fun finishItem(d: DlItem) {
-                  if (d.state == 2) items.removeAll { it !== d && it.state == 2 && it.name == d.name }
+                  if (d.state == 2) items.removeAll { it !== d && it.state == 2 && it.name == d.name && it.folder == d.folder }
                   saveItems()
                   refreshDl()
               }
@@ -1877,290 +2486,13 @@ jobs:
 
               // ---------- direct file downloads (links inside web pages) ----------
 
-              private fun startDirect(url: String, ua: String?, cd: String?, mimeHint: String?, page: String, profile: String) {
-                  val name = URLUtil.guessFileName(url, cd, mimeHint)
-                  val d = DlItem(name.substringBeforeLast("."), 0, 0, null, null, "")
-                  d.kind = 1
-                  d.link = url
-                  d.page = page
-                  d.profile = profile
-                  d.ua = ua
-                  d.name = name
-                  items.add(0, d)
-                  dlTab = 0
-                  flyToDownload()
-                  toast("Downloading " + name)
-                  startRun(d)
-              }
-
-              private fun openFollow(start: String, ua: String?, offset: Long, profile: String): HttpURLConnection {
-                  var url = start
-                  for (hop in 0..10) {
-                      val c = URL(url).openConnection() as HttpURLConnection
-                      c.instanceFollowRedirects = false
-                      c.connectTimeout = 20000
-                      c.readTimeout = 30000
-                      if (ua != null) c.setRequestProperty("User-Agent", ua)
-                      val ck = cookiesFor(profile).getCookie(url)
-                      if (ck != null) c.setRequestProperty("Cookie", ck)
-                      if (offset > 0) c.setRequestProperty("Range", "bytes=" + offset + "-")
-                      val code = c.responseCode
-                      if (code in 300..399) {
-                          val loc = c.getHeaderField("Location") ?: throw Exception("Bad redirect")
-                          url = URL(URL(url), loc).toString()
-                          c.disconnect()
-                          continue
-                      }
-                      if (code !in 200..299) throw Exception("Server returned HTTP " + code)
-                      return c
-                  }
-                  throw Exception("Too many redirects")
-              }
-
-              private fun runDirect(d: DlItem, g: Int) {
-                  if (d.stop != 0 || d.gen != g) return
-                  d.state = 1
-                  ui()
-                  val dir = File(filesDir, "parts/" + d.id)
-                  try {
-                      dir.mkdirs()
-                      val part = File(dir, d.name)
-                      var offset = if (part.exists()) part.length() else 0L
-                      val conn = openFollow(d.link, d.ua, offset, d.profile)
-                      val append = offset > 0 && conn.responseCode == 206
-                      if (!append) offset = 0L
-                      val len = conn.contentLengthLong
-                      if (len > 0) d.total = offset + len
-                      var done = offset
-                      var last = 0L
-                      var completed = false
-                      conn.inputStream.use { ins ->
-                          java.io.FileOutputStream(part, append).use { out ->
-                              val buf = ByteArray(65536)
-                              while (true) {
-                                  val n = ins.read(buf)
-                                  if (n < 0) { completed = true; break }
-                                  if (d.stop != 0 || d.gen != g) break
-                                  out.write(buf, 0, n)
-                                  done += n
-                                  d.done = done
-                                  val now = System.currentTimeMillis()
-                                  if (now - last > 400) {
-                                      last = now
-                                      if (d.total > 0) d.progress = (done * 100 / d.total).toInt().coerceIn(0, 100)
-                                      ui()
-                                  }
-                              }
-                          }
-                      }
-                      if (completed) {
-                          if (d.gen != g) return
-                          saveFile(d, part)
-                          d.total = part.length()
-                          d.done = d.total
-                          d.title = part.nameWithoutExtension
-                          d.state = 2
-                          d.progress = 100
-                          runOnUiThread { toast("Downloaded: " + d.title) }
-                      } else if (d.gen == g && d.stop == 1) {
-                          d.state = 4
-                      }
-                  } catch (e: Exception) {
-                      if (d.gen == g) {
-                          if (d.stop == 1) {
-                              d.state = 4
-                          } else if (d.stop != 2) {
-                              d.state = 3
-                              d.msg = (e.message ?: "Unknown error").take(300)
-                          }
-                      }
-                  } finally {
-                      if (d.state == 2 || d.stop == 2) dir.deleteRecursively()
-                      runOnUiThread { finishItem(d) }
-                  }
-              }
-
-              private fun openFile(d: DlItem) {
-                  try {
-                      val i = Intent(Intent.ACTION_VIEW)
-                      i.setDataAndType(Uri.parse(d.uri), d.mime ?: "*/*")
-                      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                      startActivity(i)
-                  } catch (e: Exception) {
-                      toast("No app found to open this file")
-                  }
-              }
-
-              private fun saveItems() {
-                  val a = JSONArray()
-                  for (d in items) {
-                      val st = if (d.state == 0 || d.state == 1) 4 else d.state
-                      a.put(
-                          JSONObject().put("t", d.title).put("s", st).put("u", d.uri ?: "").put("m", d.mime ?: "")
-                              .put("g", d.msg).put("n", d.name).put("i", d.id).put("k", d.kind).put("l", d.link)
-                              .put("p", d.page).put("a", d.audio).put("f", d.fmt).put("ua", d.ua ?: "")
-                              .put("z", d.total).put("d", d.done).put("r", d.progress)
-                              .put("v", d.vid).put("q", d.qkey).put("tg", d.qtag).put("pf", d.profile)
-                      )
-                  }
-                  prefs.edit().putString("dl", a.toString()).apply()
-              }
-
-              private fun loadItems() {
-                  try {
-                      val a = JSONArray(prefs.getString("dl", "[]"))
-                      for (i in 0 until a.length()) {
-                          val o = a.getJSONObject(i)
-                          var st = o.getInt("s")
-                          if (st == 0 || st == 1) st = 4
-                          val it2 = DlItem(o.getString("t"), st, o.optInt("r", 100), o.optString("u"), o.optString("m"), o.optString("g"))
-                          it2.name = o.optString("n")
-                          val id = o.optString("i")
-                          if (id.isNotEmpty()) it2.id = id
-                          it2.kind = o.optInt("k", 0)
-                          it2.link = o.optString("l")
-                          it2.page = o.optString("p")
-                          it2.audio = o.optBoolean("a", false)
-                          it2.fmt = o.optString("f", "bv*+ba/b")
-                          val ua = o.optString("ua")
-                          it2.ua = if (ua.isEmpty()) null else ua
-                          it2.total = o.optLong("z", 0L)
-                          it2.done = o.optLong("d", 0L)
-                          it2.vid = o.optString("v")
-                          it2.qkey = o.optString("q")
-                          it2.qtag = o.optString("tg")
-                          it2.profile = o.optString("pf")
-                          items.add(it2)
-                      }
-                  } catch (e: Exception) { }
-              }
-
-              private fun updateEngine(manual: Boolean) {
-                  try {
-                      val r = YoutubeDL.getInstance().updateYoutubeDL(application, YoutubeDL.UpdateChannel.NIGHTLY)
-                      if (manual) runOnUiThread { toast("Engine update: $r") }
-                  } catch (e: Exception) {
-                      if (manual) runOnUiThread { toast("Update failed: ${e.message}") }
-                  }
-              }
-
-              private fun progressText(d: DlItem): String {
-                  if (d.kind == 1) {
-                      return if (d.total > 0) fmtSize(d.done) + " / " + fmtSize(d.total) + " (" + d.progress + "%)" else fmtSize(d.done)
-                  }
-                  var s = d.progress.toString() + "%"
-                  if (d.sizeLabel.isNotEmpty()) s += " of " + d.sizeLabel
-                  if (d.total > 0) s += "  (total ~" + fmtSize(d.total) + ")"
-                  return s
-              }
-
-              private fun statusText(d: DlItem): String = when (d.state) {
-                  0 -> "Waiting..."
-                  1 -> "Downloading - " + progressText(d)
-                  4 -> "Paused - " + progressText(d)
-                  2 -> "Downloaded" + (if (d.total > 0) " - " + fmtSize(d.total) else "") + " - tap to open"
-                  else -> "Failed: " + d.msg
-              }
-
-              private fun act(label: String, color: Int = 0xFF2D7FF9.toInt(), f: () -> Unit): TextView {
-                  val t = TextView(this)
-                  t.text = label
-                  t.textSize = 14f
-                  t.setTextColor(color)
-                  t.setPadding(0, dp(10), dp(24), dp(4))
-                  t.isFocusable = false
-                  t.setOnClickListener { f() }
-                  return t
-              }
-
-              inner class DlAdapter : BaseAdapter() {
-                  override fun getCount() = shown().size
-                  override fun getItem(position: Int): Any = shown()[position]
-                  override fun getItemId(position: Int) = position.toLong()
-                  override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-                      val d = shown()[position]
-                      val box = LinearLayout(this@MainActivity)
-                      box.orientation = LinearLayout.VERTICAL
-                      box.setPadding(dp(16), dp(12), dp(16), dp(8))
-                      val t = TextView(this@MainActivity)
-                      t.text = d.title
-                      t.textSize = 16f
-                      t.maxLines = 2
-                      t.setTextColor(col.text)
-                      val s = TextView(this@MainActivity)
-                      s.text = statusText(d)
-                      s.textSize = 13f
-                      s.setTextColor(col.sec)
-                      box.addView(t)
-                      box.addView(s)
-                      if (d.state == 0 || d.state == 1 || d.state == 4) {
-                          val pb = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal)
-                          pb.max = 100
-                          pb.progress = d.progress
-                          box.addView(pb)
-                      }
-                      val row = LinearLayout(this@MainActivity)
-                      row.orientation = LinearLayout.HORIZONTAL
-                      when (d.state) {
-                          0, 1 -> row.addView(act("Pause") { pauseItem(d) })
-                          4 -> row.addView(act("Resume") { startRun(d) })
-                          3 -> row.addView(act("Retry") { startRun(d) })
-                      }
-                      row.addView(act("Open page") { openPage(d) })
-                      row.addView(act("Delete", 0xFFE5534B.toInt()) { askDelete(d) })
-                      box.addView(row)
-                      return box
-                  }
-              }
-          }
-          EOF_FILE
-          mkdir -p app/src/main/res/drawable
-          cat > app/src/main/res/drawable/ic_launcher_foreground.xml <<'EOF_FILE'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-          <path android:fillColor="#1F5FBF" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M32,38C36,32 44,32 46,38C48,44 42,48 44,54C40,58 34,54 32,48z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M60,36C66,32 76,36 76,44C76,50 70,52 68,58C64,56 62,50 60,46z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M44,68C50,64 58,66 62,72C58,78 50,80 44,74z"/>
-          <path android:strokeColor="#66FFFFFF" android:strokeWidth="0.8" android:pathData="M54,22C40,34 40,74 54,86C68,74 68,34 54,22M22,54H86M27,40H81M27,68H81"/>
-          <path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
-          <path android:strokeColor="#0A2A5C" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
-          <path android:strokeColor="#FFFFFF" android:strokeWidth="4.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
-          </vector>
-          EOF_FILE
-          cat > app/src/main/res/drawable/ic_logo.xml <<'EOF_FILE'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="150dp" android:height="150dp" android:viewportWidth="64" android:viewportHeight="64">
-          <group android:translateX="-22" android:translateY="-22">
-          <path android:fillColor="#1F5FBF" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M32,38C36,32 44,32 46,38C48,44 42,48 44,54C40,58 34,54 32,48z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M60,36C66,32 76,36 76,44C76,50 70,52 68,58C64,56 62,50 60,46z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M44,68C50,64 58,66 62,72C58,78 50,80 44,74z"/>
-          <path android:strokeColor="#66FFFFFF" android:strokeWidth="0.8" android:pathData="M54,22C40,34 40,74 54,86C68,74 68,34 54,22M22,54H86M27,40H81M27,68H81"/>
-          <path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
-          <path android:strokeColor="#0A2A5C" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
-          <path android:strokeColor="#FFFFFF" android:strokeWidth="4.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
-          </group>
-          </vector>
-          EOF_FILE
-          mkdir -p app/src/main/res/values
-          cat > app/src/main/res/values/colors.xml <<'EOF_FILE'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <color name="ic_bg">#0A1F44</color>
-          </resources>
-          EOF_FILE
-          mkdir -p app/src/main/res/mipmap-anydpi-v26
-          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF_FILE'
-          <?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@color/ic_bg"/>
-              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
-          </adaptive-icon>
-          EOF_FILE
-
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon -PvCode=$((100 + GITHUB_RUN_NUMBER))
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: abh-browser-APK
-          path: app/build/outputs/apk/debug/*.apk
+              private fun startDirectNamed(
+                  url: String,
+                  titleHint: String,
+                  page: String,
+                  profile: String,
+                  folderPath: String,
+                  expectAudio: Boolean
+              ) {
+                  val cleanTitle = sanitizeName(titleHint)
+                  val rawName = URLUtil.guessFileName
