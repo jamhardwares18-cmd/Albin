@@ -1,5 +1,3 @@
-
-```yaml
 name: Build APK
 
 on:
@@ -1012,6 +1010,7 @@ jobs:
                           cur > pos -> cur - 1
                           else -> cur
                       }
+                      if (cur == pos) cur = -1
                       showTab(next)
                   } else {
                       tabs[0].home = true
@@ -2165,4 +2164,3 @@ jobs:
         with:
           name: abh-browser-APK
           path: app/build/outputs/apk/debug/*.apk
-```
