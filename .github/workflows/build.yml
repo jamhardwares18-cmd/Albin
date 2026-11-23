@@ -294,7 +294,7 @@ jobs:
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:padding="8dp">
                       <ImageButton android:id="@+id/dlBack" android:layout_width="48dp" android:layout_height="48dp" android:src="@drawable/ic_back" android:contentDescription="dlBack" android:background="?android:attr/selectableItemBackgroundBorderless"/>
                       <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="8dp" android:text="Downloads" android:textSize="20sp" android:textStyle="bold"/>
-                      <TextView android:id="@+id/dlRetryAll" android:tag="accent" android:layout_width="wrap_content" android:layout_height="wrap_content" android:padding="12dp" android:text="Retry all" android:textSize="15sp" android:visibility="gone" android:clickable="true" android:focusable="true"/>
+                      <TextView android:id="@+id/dlRetryAll" android:tag="accent" android:layout_width="wrap_content" android:layout_height="wrap_content" android:padding="12dp" android:text="Resume all" android:textSize="15sp" android:visibility="gone" android:clickable="true" android:focusable="true"/>
                       <TextView android:id="@+id/dlClear" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:padding="12dp" android:text="Clear" android:textSize="15sp" android:clickable="true" android:focusable="true"/>
                   </LinearLayout>
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingBottom="8dp">
@@ -410,6 +410,8 @@ jobs:
           import org.jsoup.Jsoup
           import org.jsoup.nodes.Document
           import org.jsoup.nodes.Element
+          import org.jsoup.nodes.Node
+          import org.jsoup.nodes.TextNode
           import java.io.File
           import java.io.FileOutputStream
           import java.net.HttpURLConnection
@@ -956,8 +958,43 @@ jobs:
                     function normKey(s) {
                       return (s || '').toLowerCase().replace(/\.[a-z0-9]{2,4}$/, '').replace(/[^a-z0-9]/g, '');
                     }
-                    function rowTitle(row, skipA) {
-                      if (!row) return '';
+                    function findSingleRow(el) {
+                      var cur = el ? el.parentElement : null;
+                      var depth = 0;
+                      while (cur && depth < 6) {
+                        var tag = (cur.tagName || '').toUpperCase();
+                        if (tag === 'TR' || tag === 'LI' || tag === 'DIV' || tag === 'P') {
+                          if (cur.querySelectorAll('a').length <= 6 && cur.querySelectorAll('tr').length <= 1) {
+                            return cur;
+                          }
+                          return null;
+                        }
+                        cur = cur.parentElement;
+                        depth++;
+                      }
+                      return null;
+                    }
+                    function inlineTitle(el) {
+                      if (!el) return '';
+                      var best = '';
+                      var stopTags = {BR:1,TR:1,LI:1,DIV:1,P:1,HR:1,TABLE:1};
+                      function scanDir(forward) {
+                        var n = forward ? el.nextSibling : el.previousSibling;
+                        var steps = 0;
+                        while (n && steps < 10) {
+                          if (n.nodeType === 1 && stopTags[n.tagName]) break;
+                          var txt = (n.textContent || '').trim();
+                          if (!isJunkTxt(txt) && txt.length > best.length) best = txt;
+                          n = forward ? n.nextSibling : n.previousSibling;
+                          steps++;
+                        }
+                      }
+                      scanDir(true);
+                      if (!best) scanDir(false);
+                      return best;
+                    }
+                    function rowTitle(row, skipA, refEl) {
+                      if (!row) return inlineTitle(refEl);
                       var best = '';
                       var as = row.querySelectorAll('a');
                       for (var i = 0; i < as.length; i++) {
@@ -1052,10 +1089,10 @@ jobs:
                     document.addEventListener('touchstart', function(e) {
                       var t = e.target;
                       var a = t && t.closest ? t.closest('a') : null;
-                      var row = t && t.closest ? t.closest('tr, li, div') : null;
+                      var row = findSingleRow(a || t);
                       var u = (a && a.href && a.href.indexOf('http') === 0) ? a.href : findUrlInEl(t);
                       var txt = a ? (a.innerText || a.textContent || a.title || '').trim() : '';
-                      if (isJunkTxt(txt) && row) txt = rowTitle(row, null);
+                      if (isJunkTxt(txt)) txt = rowTitle(row, a, a || t);
                       window.__abhLastUrl = u || '';
                       window.__abhLastText = txt || '';
                     }, true);
@@ -1063,12 +1100,12 @@ jobs:
                       var t = e.target;
                       if (!t || !t.closest) return;
                       var a = t.closest('a');
-                      var row = (a ? a.closest('tr, li, div') : t.closest('tr, li, div'));
+                      var row = findSingleRow(a || t);
                       var dlSibInRow = row ? findRowDlLink(row, a) : null;
                       if (dlSibInRow && (isPlayElem(t) || (a && isPlayElem(a)))) return;
                       if (a && a.href) {
                         var txt = (a.innerText || a.textContent || a.title || '').trim();
-                        var rowName = !isJunkTxt(txt) ? txt : rowTitle(row, a);
+                        var rowName = !isJunkTxt(txt) ? txt : rowTitle(row, a, a);
                         if (isAudioHref(a.href)) {
                           e.preventDefault();
                           e.stopPropagation();
@@ -1106,7 +1143,7 @@ jobs:
                           e.preventDefault();
                           e.stopPropagation();
                           var name2 = (t.innerText || t.textContent || '').trim();
-                          ABH.onAudioLink(mp3, !isJunkTxt(name2) ? name2 : rowTitle(row, null));
+                          ABH.onAudioLink(mp3, !isJunkTxt(name2) ? name2 : rowTitle(row, null, t));
                           return;
                         }
                         var clickedTxt = (t.innerText || t.textContent || '').trim();
@@ -1114,7 +1151,7 @@ jobs:
                           if (dlSibInRow && (row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSibInRow.href))) {
                             e.preventDefault();
                             e.stopPropagation();
-                            ABH.onAudioLink(dlSibInRow.href, rowTitle(row, null) || clickedTxt);
+                            ABH.onAudioLink(dlSibInRow.href, rowTitle(row, null, t) || clickedTxt);
                             return;
                           }
                           var matched2 = findAudioOnPageByTitle(clickedTxt);
@@ -1753,8 +1790,68 @@ jobs:
                   return resUrl to Jsoup.parse(resHtml, resUrl)
               }
 
+              private fun findSingleSongRow(el: Element?): Element? {
+                  var cur = el?.parent()
+                  var depth = 0
+                  while (cur != null && depth < 6) {
+                      val tag = cur.tagName().lowercase(Locale.US)
+                      if (tag == "tr" || tag == "li" || tag == "div" || tag == "p") {
+                          if (cur.select("a").size <= 6 && cur.select("tr").size <= 1) {
+                              return cur
+                          }
+                          return null
+                      }
+                      cur = cur.parent()
+                      depth++
+                  }
+                  return null
+              }
+
+              private fun extractInlineTitle(el: Element?): String {
+                  if (el == null) return ""
+                  val stopTags = setOf("br", "tr", "li", "div", "p", "hr", "table")
+                  fun scanFrom(anchor: Element): String {
+                      var best = ""
+                      fun checkNode(n: Node) {
+                          val raw = when (n) {
+                              is TextNode -> n.text()
+                              is Element -> n.text()
+                              else -> ""
+                          }
+                          val t = sanitizeName(raw)
+                          if (!isJunkTitle(t) && t.length > best.length) best = t
+                      }
+                      var cur: Node? = anchor.nextSibling()
+                      var steps = 0
+                      while (cur != null && steps < 10) {
+                          if (cur is Element && cur.tagName().lowercase(Locale.US) in stopTags) break
+                          checkNode(cur)
+                          cur = cur.nextSibling()
+                          steps++
+                      }
+                      if (best.isNotEmpty()) return best
+                      cur = anchor.previousSibling()
+                      steps = 0
+                      while (cur != null && steps < 10) {
+                          if (cur is Element && cur.tagName().lowercase(Locale.US) in stopTags) break
+                          checkNode(cur)
+                          cur = cur.previousSibling()
+                          steps++
+                      }
+                      return best
+                  }
+                  val direct = scanFrom(el)
+                  if (direct.isNotEmpty()) return direct
+                  val p = el.parent()
+                  if (p != null && p.tagName().lowercase(Locale.US) == "span" && p.select("a").size <= 2) {
+                      return scanFrom(p)
+                  }
+                  return ""
+              }
+
               private fun extractRowTitle(row: Element?): String {
                   if (row == null) return ""
+                  if (row.select("a").size > 8) return ""
                   var best = ""
                   for (a in row.select("a")) {
                       val t = sanitizeName(a.text())
@@ -1776,21 +1873,23 @@ jobs:
                   val seenAudio = HashSet<String>()
                   val handledRows = HashSet<Element>()
 
-                  fun addAudio(rawUrl: String, rawTitle: String, row: Element?): Boolean {
+                  fun addAudio(rawUrl: String, rawTitle: String, row: Element?, el: Element?): Boolean {
                       val u = rawUrl.substringBefore('#').trim()
                       if (!u.startsWith("http")) return false
                       val nu = normUrl(u)
                       if (nu in seenAudio) return false
                       if (row != null && row in handledRows) return false
                       val cleaned = sanitizeName(rawTitle)
-                      val rowFallback = if (isJunkTitle(cleaned)) extractRowTitle(row) else ""
+                      val rowFallback = if (isJunkTitle(cleaned)) {
+                          extractRowTitle(row).ifEmpty { extractInlineTitle(el) }
+                      } else ""
                       val title = when {
                           !isJunkTitle(cleaned) -> cleaned
                           rowFallback.isNotEmpty() -> rowFallback
                           else -> guessNameFromUrl(u)
                       }
                       seenAudio.add(nu)
-                      if (row != null && row.select("a").size <= 8) handledRows.add(row)
+                      if (row != null) handledRows.add(row)
                       audios.add(FoundLink(u, title))
                       return true
                   }
@@ -1799,48 +1898,49 @@ jobs:
                   for (a in doc.select("a[href]")) {
                       val h = a.absUrl("href").substringBefore('#').trim()
                       if (!h.startsWith("http") || !isAudioUrl(h)) continue
-                      val row = a.closest("tr, li")
-                      val t = sanitizeName(a.text()).let { if (!isJunkTitle(it)) it else extractRowTitle(row) }
-                      addAudio(h, t, row)
+                      val row = findSingleSongRow(a)
+                      val rawT = sanitizeName(a.text())
+                      val t = if (!isJunkTitle(rawT)) rawT else extractRowTitle(row).ifEmpty { extractInlineTitle(a) }
+                      addAudio(h, t, row, a)
                   }
 
                   // 2. <audio> / <source> tags
                   for (el in doc.select("audio[src], source[src]")) {
                       val h = el.absUrl("src")
-                      if (isAudioUrl(h)) addAudio(h, "", el.closest("tr, li"))
+                      if (isAudioUrl(h)) addAudio(h, "", findSingleSongRow(el), el)
                   }
 
                   // 3. Embedded audio URLs in onclick / data-* attributes
                   val mp3Re = Regex("https?://[^'\"\\s)]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"\\s)]*)?", RegexOption.IGNORE_CASE)
                   val relMp3Re = Regex("['\"]([^'\"]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"]*)?)['\"]", RegexOption.IGNORE_CASE)
                   for (el in doc.select("[onclick], [data-src], [data-url], [data-file], [data-mp3], [data-audio]")) {
-                      val row = el.closest("tr, li")
+                      val row = findSingleSongRow(el)
                       val rawElText = sanitizeName(el.text())
-                      val title = if (!isJunkTitle(rawElText)) rawElText else extractRowTitle(row)
+                      val title = if (!isJunkTitle(rawElText)) rawElText else extractRowTitle(row).ifEmpty { extractInlineTitle(el) }
                       for (attr in listOf("data-src", "data-url", "data-file", "data-mp3", "data-audio", "onclick")) {
                           val v = el.attr(attr)
                           if (v.isEmpty()) continue
                           val m = mp3Re.find(v)
                           if (m != null) {
-                              addAudio(m.value, title, row)
+                              addAudio(m.value, title, row, el)
                           } else {
                               val m2 = relMp3Re.find(v)
                               if (m2 != null) {
                                   try {
                                       val abs = URL(URL(baseUrl), m2.groupValues[1]).toString()
-                                      addAudio(abs, title, row)
+                                      addAudio(abs, title, row, el)
                                   } catch (e: Exception) { }
                               }
                           }
                       }
                   }
 
-                  // 4. Song rows with download-icon links (only if row wasn't already added in steps 1-3)
+                  // 4. Song rows with download-icon links (only single-song rows not handled in steps 1-3)
                   val sizeInRowRe = Regex("\\b[0-9]+(\\.[0-9]+)?\\s*(mb|kb|gb)\\b", RegexOption.IGNORE_CASE)
-                  for (row in doc.select("tr, li")) {
+                  for (row in doc.select("tr, li, div, p")) {
                       if (row in handledRows) continue
                       val links = row.select("a[href]")
-                      if (links.isEmpty() || links.size > 6) continue
+                      if (links.isEmpty() || links.size > 6 || row.select("tr").size > 1) continue
                       var dlHref = ""
                       var rowAlreadyHandled = false
                       val rowHasSize = sizeInRowRe.containsMatchIn(row.text())
@@ -1863,7 +1963,7 @@ jobs:
                       }
                       if (!rowAlreadyHandled && dlHref.isNotEmpty()) {
                           val bestTitle = extractRowTitle(row)
-                          if (bestTitle.isNotEmpty()) addAudio(dlHref, bestTitle, row)
+                          if (bestTitle.isNotEmpty()) addAudio(dlHref, bestTitle, row, row)
                       }
                   }
 
@@ -1876,7 +1976,7 @@ jobs:
                           val raw = m.groupValues[1]
                           try {
                               val abs = URL(URL(baseUrl), raw).toString()
-                              addAudio(abs, "", null)
+                              addAudio(abs, "", null, null)
                           } catch (e: Exception) { }
                       }
                   }
@@ -1988,10 +2088,26 @@ jobs:
               ) {
                   if (audios.isEmpty()) return
                   val cleanFolder = sanitizeFolder(folderPath)
+                  val usedNames = HashSet<String>()
+                  for (existing in items) {
+                      if (existing.folder == cleanFolder && existing.title.isNotEmpty()) {
+                          usedNames.add(existing.title.lowercase(Locale.US))
+                      }
+                  }
                   val toRun = mutableListOf<DlItem>()
                   for (a in audios) {
                       val ext = urlExt(a.url).let { if (it in AUDIO_EXTS) ".$it" else ".mp3" }
-                      val cleanTitle = sanitizeName(a.name).ifEmpty { "Track" }
+                      var cleanTitle = sanitizeName(a.name).ifEmpty { "Track" }
+                      if (!usedNames.add(cleanTitle.lowercase(Locale.US))) {
+                          val fromUrl = guessNameFromUrl(a.url)
+                          if (!isJunkTitle(fromUrl) && usedNames.add(fromUrl.lowercase(Locale.US))) {
+                              cleanTitle = fromUrl
+                          } else {
+                              var n = 2
+                              while (!usedNames.add("$cleanTitle ($n)".lowercase(Locale.US))) n++
+                              cleanTitle = "$cleanTitle ($n)"
+                          }
+                      }
                       val d = DlItem(cleanTitle, 0, 0, null, null, "")
                       d.kind = 1
                       d.link = a.url
@@ -2305,9 +2421,9 @@ jobs:
               // ---------- downloads ----------
 
               private fun retryAllFailed() {
-                  val failed = items.filter { it.state == 3 }.reversed()
-                  if (failed.isEmpty()) return
-                  for (d in failed) {
+                  val toRun = items.filter { it.state == 3 || it.state == 4 }.reversed()
+                  if (toRun.isEmpty()) return
+                  for (d in toRun) {
                       d.stop = 0
                       d.state = 0
                       d.gen++
@@ -2320,7 +2436,7 @@ jobs:
                       }
                   }
                   refreshDl()
-                  toast("Retrying ${failed.size} downloads")
+                  toast("Starting ${toRun.size} downloads")
               }
 
               private fun clearDownloadsTab() {
@@ -2849,8 +2965,15 @@ jobs:
                       v.setTypeface(null, if (sel) Typeface.BOLD else Typeface.NORMAL)
                       v.background = if (sel) shape(col.card, 20) else null
                   }
-                  val hasFailed = dlTab == 0 && items.any { it.state == 3 }
-                  findViewById<View>(R.id.dlRetryAll).visibility = if (hasFailed) View.VISIBLE else View.GONE
+                  val retryBtn = findViewById<TextView>(R.id.dlRetryAll)
+                  val hasFailed = items.any { it.state == 3 }
+                  val hasPaused = items.any { it.state == 4 }
+                  if (dlTab == 0 && (hasFailed || hasPaused)) {
+                      retryBtn.text = if (hasFailed && !hasPaused) "Retry all" else "Resume all"
+                      retryBtn.visibility = View.VISIBLE
+                  } else {
+                      retryBtn.visibility = View.GONE
+                  }
                   findViewById<TextView>(R.id.dlEmpty).text =
                       if (dlTab == 0) "No active downloads" else "No downloaded files yet"
                   dlAdapter.notifyDataSetChanged()
@@ -3563,3 +3686,4 @@ jobs:
         with:
           name: abh-browser-APK
           path: app/build/outputs/apk/debug/*.apk
+          
