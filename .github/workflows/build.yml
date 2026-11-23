@@ -366,6 +366,7 @@ jobs:
           import android.provider.DocumentsContract
           import android.provider.MediaStore
           import android.text.TextUtils
+          import android.util.Base64
           import android.view.ContextThemeWrapper
           import android.view.Gravity
           import android.view.HapticFeedbackConstants
@@ -494,6 +495,7 @@ jobs:
               @Volatile private var pendingClickTime = 0L
               private val lastUiUpdate = AtomicLong(0L)
               private val saveLock = Any()
+              private val wvDlLock = Any()
               private var customView: View? = null
               private var customCb: WebChromeClient.CustomViewCallback? = null
               private var fileCb: ValueCallback<Array<Uri>>? = null
@@ -2957,6 +2959,221 @@ jobs:
                   }
               }
 
+              @SuppressLint("SetJavaScriptEnabled")
+              private fun downloadViaWebView(d: DlItem, g: Int, tmpFile: File): Boolean {
+                  synchronized(wvDlLock) {
+                      if (d.stop != 0 || d.gen != g) return false
+                      val linkUri = Uri.parse(d.link)
+                      val pageUri = if (d.page.isNotEmpty()) Uri.parse(d.page) else null
+                      val originUrl = if (pageUri != null && linkUri.host.equals(pageUri.host, ignoreCase = true)) {
+                          d.page
+                      } else {
+                          "${linkUri.scheme ?: "https"}://${linkUri.host ?: ""}/"
+                      }
+                      val latch = CountDownLatch(1)
+                      val finished = AtomicBoolean(false)
+                      val completed = AtomicBoolean(false)
+                      val lastAct = AtomicLong(System.currentTimeMillis())
+                      var errMsg: String? = null
+                      val holder = arrayOfNulls<WebView>(1)
+                      val handler = Handler(Looper.getMainLooper())
+                      val fosLock = Any()
+                      var doneBytes = 0L
+                      if (tmpFile.exists()) tmpFile.delete()
+                      val fos = FileOutputStream(tmpFile, false)
+
+                      fun cleanup(wv: WebView?) {
+                          if (wv != null) {
+                              try { wv.stopLoading() } catch (e: Exception) { }
+                              try { wv.destroy() } catch (e: Exception) { }
+                          }
+                      }
+
+                      val bridge = object {
+                          @JavascriptInterface
+                          fun onMeta(total: Long, ct: String) {
+                              lastAct.set(System.currentTimeMillis())
+                              if (total > 0) d.total = total
+                              if (d.customName) {
+                                  val ext = audioExtFromMeta(null, d.link, ct)
+                                  d.name = sanitizeName(d.title).ifEmpty { "Track" } + ext
+                              }
+                          }
+
+                          @JavascriptInterface
+                          fun onChunk(b64: String) {
+                              if (d.stop != 0 || d.gen != g) return
+                              lastAct.set(System.currentTimeMillis())
+                              val bytes = Base64.decode(b64, Base64.DEFAULT)
+                              synchronized(fosLock) {
+                                  fos.write(bytes)
+                              }
+                              doneBytes += bytes.size
+                              d.done = doneBytes
+                              if (d.total > 0) d.progress = (doneBytes * 100 / d.total).toInt().coerceIn(0, 100)
+                              ui()
+                          }
+
+                          @JavascriptInterface
+                          fun onDone() {
+                              lastAct.set(System.currentTimeMillis())
+                              completed.set(true)
+                              if (finished.compareAndSet(false, true)) {
+                                  handler.post { cleanup(holder[0]) }
+                                  latch.countDown()
+                              }
+                          }
+
+                          @JavascriptInterface
+                          fun onFail(msg: String) {
+                              if (msg != "STOPPED") errMsg = msg
+                              if (finished.compareAndSet(false, true)) {
+                                  handler.post { cleanup(holder[0]) }
+                                  latch.countDown()
+                              }
+                          }
+
+                          @JavascriptInterface
+                          fun shouldStop(): Boolean = d.stop != 0 || d.gen != g
+                      }
+
+                      val urlLiteral = JSONObject.quote(d.link)
+                      val fetchJs = """
+                      (async function(){
+                        try {
+                          if (window.__abhDlRun) return;
+                          window.__abhDlRun = true;
+                          var resp = await fetch($urlLiteral, { credentials: 'include' });
+                          if (!resp.ok) { DL.onFail('Server returned HTTP ' + resp.status); return; }
+                          var ct = (resp.headers.get('content-type') || '').toLowerCase();
+                          if (ct.indexOf('text/html') >= 0) { DL.onFail('Server returned webpage instead of MP3'); return; }
+                          var len = parseInt(resp.headers.get('content-length') || '0', 10) || 0;
+                          DL.onMeta(len, ct);
+                          function u8ToB64(u8) {
+                            var s = '';
+                            for (var i = 0; i < u8.length; i += 8192) {
+                              s += String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + 8192, u8.length)));
+                            }
+                            return btoa(s);
+                          }
+                          function sendChunks(u8) {
+                            var CHUNK = 49152;
+                            for (var i = 0; i < u8.length; i += CHUNK) {
+                              if (DL.shouldStop()) return false;
+                              DL.onChunk(u8ToB64(u8.subarray(i, Math.min(i + CHUNK, u8.length))));
+                            }
+                            return true;
+                          }
+                          if (!resp.body || !resp.body.getReader) {
+                            var ab = new Uint8Array(await resp.arrayBuffer());
+                            if (sendChunks(ab)) DL.onDone();
+                            else DL.onFail('STOPPED');
+                            return;
+                          }
+                          var reader = resp.body.getReader();
+                          var pending = [];
+                          var pendingLen = 0;
+                          function flush() {
+                            if (pendingLen === 0) return true;
+                            var merged = new Uint8Array(pendingLen);
+                            var off = 0;
+                            for (var i = 0; i < pending.length; i++) {
+                              merged.set(pending[i], off);
+                              off += pending[i].length;
+                            }
+                            pending = [];
+                            pendingLen = 0;
+                            return sendChunks(merged);
+                          }
+                          while (true) {
+                            if (DL.shouldStop()) {
+                              try { await reader.cancel(); } catch(e) {}
+                              DL.onFail('STOPPED');
+                              return;
+                            }
+                            var r = await reader.read();
+                            if (r.done) {
+                              if (flush()) DL.onDone();
+                              else DL.onFail('STOPPED');
+                              return;
+                            }
+                            pending.push(r.value);
+                            pendingLen += r.value.length;
+                            if (pendingLen >= 49152) {
+                              if (!flush()) {
+                                try { await reader.cancel(); } catch(e) {}
+                                DL.onFail('STOPPED');
+                                return;
+                              }
+                            }
+                          }
+                        } catch (e) {
+                          DL.onFail(e && e.message ? e.message : 'Download failed');
+                        }
+                      })();
+                      """.trimIndent()
+
+                      fun tryStartFetch(wv: WebView, attempt: Int) {
+                          if (finished.get() || d.stop != 0 || d.gen != g) return
+                          wv.evaluateJavascript("document.documentElement.outerHTML.slice(0,2500)") { raw ->
+                              if (finished.get()) return@evaluateJavascript
+                              val snippet = (JSONTokener(raw).nextValue() as? String) ?: ""
+                              if ((snippet.length < 100 || isChallengeHtml(snippet)) && attempt < 6) {
+                                  handler.postDelayed({ tryStartFetch(wv, attempt + 1) }, 1200)
+                              } else {
+                                  lastAct.set(System.currentTimeMillis())
+                                  wv.evaluateJavascript(fetchJs, null)
+                              }
+                          }
+                      }
+
+                      runOnUiThread {
+                          try {
+                              val wv = WebView(this@MainActivity)
+                              holder[0] = wv
+                              if (d.profile.isNotEmpty() && multiProfile) {
+                                  try { WebViewCompat.setProfile(wv, d.profile) } catch (e: Exception) { }
+                              }
+                              applyWeb(wv)
+                              wv.addJavascriptInterface(bridge, "DL")
+                              wv.webViewClient = object : WebViewClient() {
+                                  override fun onPageFinished(view: WebView?, url: String?) {
+                                      if (finished.get()) return
+                                      handler.postDelayed({
+                                          if (!finished.get() && view != null) tryStartFetch(view, 0)
+                                      }, 300)
+                                  }
+                              }
+                              wv.loadUrl(originUrl)
+                          } catch (e: Exception) {
+                              errMsg = e.message ?: "WebView init error"
+                              if (finished.compareAndSet(false, true)) latch.countDown()
+                          }
+                      }
+
+                      try {
+                          while (!latch.await(1500, TimeUnit.MILLISECONDS)) {
+                              if (d.stop != 0 || d.gen != g) break
+                              if (System.currentTimeMillis() - lastAct.get() > 35000) {
+                                  errMsg = "Download timed out"
+                                  break
+                              }
+                          }
+                      } finally {
+                          if (finished.compareAndSet(false, true)) {
+                              handler.post { cleanup(holder[0]) }
+                          }
+                          synchronized(fosLock) {
+                              try { fos.flush() } catch (e: Exception) { }
+                              try { fos.close() } catch (e: Exception) { }
+                          }
+                      }
+                      if (d.stop != 0 || d.gen != g) return false
+                      if (!completed.get()) throw Exception(errMsg ?: "Download failed")
+                      return true
+                  }
+              }
+
               private fun runDirect(d: DlItem, g: Int) {
                   if (d.stop != 0 || d.gen != g) return
                   d.state = 1
@@ -2965,57 +3182,66 @@ jobs:
                   try {
                       dir.mkdirs()
                       val tmpFile = File(dir, "part.bin")
-                      var offset = if (tmpFile.exists()) tmpFile.length() else 0L
-                      var conn = openFollow(d.link, d.ua, offset, d.profile, d.page)
-                      var ct = (conn.contentType ?: "").lowercase(Locale.US)
-                      if (d.expectAudio && ct.contains("text/html")) {
-                          val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().take(200000) }
-                          val base = conn.url.toString()
-                          conn.disconnect()
-                          val doc = Jsoup.parse(html, base)
-                          var redir = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
-                              ?.substringAfter("url=", "")?.trim('"', '\'', ' ') ?: ""
-                          if (redir.isEmpty()) {
-                              redir = doc.select("a[href], source[src], audio[src]")
-                                  .map { it.absUrl(if (it.hasAttr("href")) "href" else "src") }
-                                  .firstOrNull { isAudioUrl(it) } ?: ""
-                          }
-                          if (redir.isEmpty()) throw Exception("Server returned webpage instead of MP3")
-                          val resolved = URL(URL(base), redir).toString()
-                          offset = 0L
-                          conn = openFollow(resolved, d.ua, 0L, d.profile, base)
-                          ct = (conn.contentType ?: "").lowercase(Locale.US)
-                          if (ct.contains("text/html")) {
-                              conn.disconnect()
-                              throw Exception("Server returned webpage instead of MP3")
-                          }
-                      }
-                      if (offset == 0L && d.customName) {
-                          val ext = audioExtFromMeta(conn.getHeaderField("Content-Disposition"), conn.url.toString(), ct)
-                          d.name = sanitizeName(d.title).ifEmpty { "Track" } + ext
-                      }
-                      val append = offset > 0 && conn.responseCode == 206
-                      if (!append) offset = 0L
-                      val len = conn.contentLengthLong
-                      if (len > 0) d.total = offset + len
-                      var done = offset
                       var completed = false
-                      conn.inputStream.use { ins ->
-                          FileOutputStream(tmpFile, append).use { out ->
-                              val buf = ByteArray(65536)
-                              while (true) {
-                                  val n = ins.read(buf)
-                                  if (n < 0) { completed = true; break }
-                                  if (d.stop != 0 || d.gen != g) break
-                                  out.write(buf, 0, n)
-                                  done += n
-                                  d.done = done
-                                  if (d.total > 0) d.progress = (done * 100 / d.total).toInt().coerceIn(0, 100)
-                                  ui()
+                      var useWv = false
+                      try {
+                          var offset = if (tmpFile.exists()) tmpFile.length() else 0L
+                          var conn = openFollow(d.link, d.ua, offset, d.profile, d.page)
+                          var ct = (conn.contentType ?: "").lowercase(Locale.US)
+                          if (d.expectAudio && ct.contains("text/html")) {
+                              val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().take(200000) }
+                              val base = conn.url.toString()
+                              conn.disconnect()
+                              val doc = Jsoup.parse(html, base)
+                              var redir = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
+                                  ?.substringAfter("url=", "")?.trim('"', '\'', ' ') ?: ""
+                              if (redir.isEmpty()) {
+                                  redir = doc.select("a[href], source[src], audio[src]")
+                                      .map { it.absUrl(if (it.hasAttr("href")) "href" else "src") }
+                                      .firstOrNull { isAudioUrl(it) } ?: ""
+                              }
+                              if (redir.isEmpty()) throw Exception("Server returned webpage instead of MP3")
+                              val resolved = URL(URL(base), redir).toString()
+                              offset = 0L
+                              conn = openFollow(resolved, d.ua, 0L, d.profile, base)
+                              ct = (conn.contentType ?: "").lowercase(Locale.US)
+                              if (ct.contains("text/html")) {
+                                  conn.disconnect()
+                                  throw Exception("Server returned webpage instead of MP3")
                               }
                           }
+                          if (offset == 0L && d.customName) {
+                              val ext = audioExtFromMeta(conn.getHeaderField("Content-Disposition"), conn.url.toString(), ct)
+                              d.name = sanitizeName(d.title).ifEmpty { "Track" } + ext
+                          }
+                          val append = offset > 0 && conn.responseCode == 206
+                          if (!append) offset = 0L
+                          val len = conn.contentLengthLong
+                          if (len > 0) d.total = offset + len
+                          var done = offset
+                          conn.inputStream.use { ins ->
+                              FileOutputStream(tmpFile, append).use { out ->
+                                  val buf = ByteArray(65536)
+                                  while (true) {
+                                      val n = ins.read(buf)
+                                      if (n < 0) { completed = true; break }
+                                      if (d.stop != 0 || d.gen != g) break
+                                      out.write(buf, 0, n)
+                                      done += n
+                                      d.done = done
+                                      if (d.total > 0) d.progress = (done * 100 / d.total).toInt().coerceIn(0, 100)
+                                      ui()
+                                  }
+                              }
+                          }
+                          conn.disconnect()
+                      } catch (e: HttpCodeException) {
+                          if (e.code in listOf(401, 403, 429, 503)) useWv = true
+                          else throw e
                       }
-                      conn.disconnect()
+                      if (useWv) {
+                          completed = downloadViaWebView(d, g, tmpFile)
+                      }
                       if (completed) {
                           if (d.gen != g) return
                           val finalFile = File(dir, sanitizeName(d.name).ifEmpty { "download.bin" })
