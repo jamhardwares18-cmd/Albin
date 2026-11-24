@@ -1,3 +1,6 @@
+இதோ அனைத்து மாற்றங்களும் சேர்க்கப்பட்ட முழு build.yml கோப்பு (இதை அப்படியே
+.github/workflows/build.yml-ல் copy-paste செய்து build செய்யலாம்):
+
 name: Build APK
 
 on:
@@ -1648,16 +1651,54 @@ jobs:
                               if (res.audios.isEmpty() && res.folders.isEmpty()) {
                                   toast("No MP3 files or subfolders found in $cleanName")
                               } else if (res.folders.isNotEmpty()) {
-                                  val msg = StringBuilder("$cleanName (")
-                                  if (res.audios.isNotEmpty()) msg.append("${res.audios.size} songs, ")
-                                  msg.append("${res.folders.size} folders) - Download all?")
-                                  dlg().setTitle(cleanName)
-                                      .setMessage(msg.toString())
-                                      .setPositiveButton("Download all") { _, _ ->
-                                          startFolderBatch(cleanName, finalUrl, res, ignore, webUa, profile)
+                                  val hasAudios = res.audios.isNotEmpty()
+                                  val choiceLabels = mutableListOf<String>()
+                                  if (hasAudios) choiceLabels.add("Songs in this folder (${res.audios.size})")
+                                  for (f in res.folders) choiceLabels.add(f.name)
+                                  val checked = BooleanArray(choiceLabels.size) { false }
+                                  val alert = dlg().setTitle(cleanName)
+                                      .setMultiChoiceItems(choiceLabels.toTypedArray(), checked) { d, which, isChecked ->
+                                          checked[which] = isChecked
+                                          (d as? AlertDialog)?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = checked.any { it }
                                       }
+                                      .setPositiveButton("Download") { _, _ ->
+                                          val includeAudios = hasAudios && checked[0]
+                                          val offset = if (hasAudios) 1 else 0
+                                          val pickedFolders = mutableListOf<FoundLink>()
+                                          val skippedUrls = HashSet<String>()
+                                          for (i in res.folders.indices) {
+                                              if (checked[i + offset]) pickedFolders.add(res.folders[i])
+                                              else skippedUrls.add(normUrl(res.folders[i].url))
+                                          }
+                                          if (includeAudios || pickedFolders.isNotEmpty()) {
+                                              startFolderBatch(
+                                                  cleanName,
+                                                  finalUrl,
+                                                  if (includeAudios) res.audios else emptyList(),
+                                                  pickedFolders,
+                                                  skippedUrls,
+                                                  ignore,
+                                                  webUa,
+                                                  profile
+                                              )
+                                          }
+                                      }
+                                      .setNeutralButton("Select all", null)
                                       .setNegativeButton("Cancel", null)
                                       .show()
+                                  val posBtn = alert.getButton(AlertDialog.BUTTON_POSITIVE)
+                                  posBtn.isEnabled = false
+                                  val neuBtn = alert.getButton(AlertDialog.BUTTON_NEUTRAL)
+                                  neuBtn.setOnClickListener {
+                                      val next = !checked.all { it }
+                                      val lv = alert.listView
+                                      for (i in checked.indices) {
+                                          checked[i] = next
+                                          lv.setItemChecked(i, next)
+                                      }
+                                      posBtn.isEnabled = checked.any { it }
+                                      neuBtn.text = if (next) "Clear all" else "Select all"
+                                  }
                               } else {
                                   dlg().setTitle(cleanName)
                                       .setMessage("$cleanName (${res.audios.size} songs) - Download all?")
@@ -2050,37 +2091,48 @@ jobs:
               private fun startFolderBatch(
                   rootFolder: String,
                   rootUrl: String,
-                  firstRes: ScanResult,
+                  rootAudios: List<FoundLink>,
+                  selectedFolders: List<FoundLink>,
+                  skippedUrls: Set<String>,
                   templateLinks: Set<String>,
                   ua: String?,
                   profile: String
               ) {
-                  toast("Scanning ${firstRes.folders.size} folders & starting downloads...")
+                  val cleanRoot = sanitizeFolder(rootFolder)
+                  val msg = if (selectedFolders.isNotEmpty()) {
+                      "Scanning ${selectedFolders.size} folder(s) & starting downloads..."
+                  } else {
+                      "Starting ${rootAudios.size} song download(s)..."
+                  }
+                  toast(msg)
                   dlTab = 0
                   flyToDownload()
-                  if (firstRes.audios.isNotEmpty()) {
-                      enqueueAudioList(firstRes.audios, rootFolder, rootUrl, ua, profile, false)
+                  if (rootAudios.isNotEmpty()) {
+                      enqueueAudioList(rootAudios, cleanRoot, rootUrl, ua, profile, false)
                   }
+                  if (selectedFolders.isEmpty()) return
                   activeBatchCancel?.set(true)
                   val batchCancelled = AtomicBoolean(false)
                   activeBatchCancel = batchCancelled
                   Thread {
-                      var queuedSongs = firstRes.audios.size
+                      var queuedSongs = rootAudios.size
                       var scannedCount = 0
                       val visited = HashSet<String>(templateLinks)
+                      visited.addAll(skippedUrls)
                       visited.add(normUrl(rootUrl))
                       val seenSongKeys = HashSet<String>()
-                      val queue = ArrayDeque<Pair<FoundLink, String>>()
-                      for (sf in firstRes.folders) {
-                          queue.addLast(sf to sanitizeFolder("$rootFolder/${sf.name}"))
+                      val rootSlash = cleanRoot.count { it == '/' }
+                      val queue = ArrayDeque<Triple<FoundLink, String, String>>()
+                      for (sf in selectedFolders) {
+                          queue.addLast(Triple(sf, sanitizeFolder("$cleanRoot/${sf.name}"), rootUrl))
                       }
                       while (!batchCancelled.get() && queue.isNotEmpty() && scannedCount < 200 && queuedSongs < 3000) {
-                          val (folderLink, folderPath) = queue.removeFirst()
+                          val (folderLink, folderPath, refUrl) = queue.removeFirst()
                           val nf = normUrl(folderLink.url)
                           if (!visited.add(nf)) continue
                           scannedCount++
                           try {
-                              val (subFinal, subDoc) = fetchHtml(folderLink.url, ua, profile, rootUrl, batchCancelled)
+                              val (subFinal, subDoc) = fetchHtml(folderLink.url, ua, profile, refUrl, batchCancelled)
                               if (batchCancelled.get()) break
                               visited.add(normUrl(subFinal))
                               val subRes = analyzePage(subDoc, subFinal, visited)
@@ -2099,11 +2151,11 @@ jobs:
                                   }
                               }
                               if (subRes.folders.isNotEmpty()) {
-                                  val depth = folderPath.count { it == '/' }
-                                  if (depth < 2) {
+                                  val relDepth = folderPath.count { it == '/' } - rootSlash
+                                  if (relDepth < 6) {
                                       for (sub2 in subRes.folders) {
                                           if (normUrl(sub2.url) !in visited) {
-                                              queue.addLast(sub2 to sanitizeFolder("$folderPath/${sub2.name}"))
+                                              queue.addLast(Triple(sub2, sanitizeFolder("$folderPath/${sub2.name}"), subFinal))
                                           }
                                       }
                                   }
@@ -2112,7 +2164,7 @@ jobs:
                       }
                       if (!batchCancelled.get()) {
                           runOnUiThread {
-                              toast("Queued $queuedSongs songs in $rootFolder")
+                              toast("Queued $queuedSongs songs in $cleanRoot")
                           }
                       }
                   }.start()
