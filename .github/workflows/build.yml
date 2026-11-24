@@ -2077,7 +2077,8 @@ jobs:
                               .ifEmpty { a.attr("title").trim() }
                               .ifEmpty { a.selectFirst("img")?.attr("alt")?.trim() ?: "" }
                       )
-                      if (label.length <= 1) continue
+                      if (label.isEmpty()) continue
+                      if (label.length == 1 && !label[0].isLetterOrDigit()) continue
                       val low = label.lowercase(Locale.US)
                       if (low in SKIP_WORDS) continue
                       val pathLow = (Uri.parse(h).path ?: "").lowercase(Locale.US)
@@ -2153,10 +2154,12 @@ jobs:
                                       }
                                   }
                               }
+                              val isLetterTab = folderLink.name.length == 1 || folderLink.name.equals("Other", ignoreCase = true)
                               if (subRes.folders.isNotEmpty()) {
                                   val relDepth = folderPath.count { it == '/' } - rootSlash
                                   if (relDepth < 6) {
                                       for (sub2 in subRes.folders) {
+                                          if (isLetterTab && (sub2.name.length == 1 || sub2.name.equals("Other", ignoreCase = true))) continue
                                           if (normUrl(sub2.url) !in visited) {
                                               queue.addLast(Triple(sub2, sanitizeFolder("$folderPath/${sub2.name}"), subFinal))
                                           }
