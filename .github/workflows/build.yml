@@ -774,9 +774,15 @@ jobs:
                   val clean = u.substringBefore('#').trim()
                   val uri = Uri.parse(clean)
                   val host = (uri.host ?: "").lowercase(Locale.US).removePrefix("www.")
-                  val path = (uri.path ?: "").let { if (it.length > 1) it.trimEnd('/') else it }
-                  val q = uri.encodedQuery
-                  return "$host$path" + (if (!q.isNullOrEmpty()) "?$q" else "")
+                  val rawPath = Uri.decode(uri.path ?: "")
+                  val path = when {
+                      rawPath.isEmpty() -> "/"
+                      rawPath.length > 1 -> rawPath.trimEnd('/')
+                      else -> rawPath
+                  }
+                  val rawQ = uri.encodedQuery
+                  val q = if (!rawQ.isNullOrEmpty()) Uri.decode(rawQ) else ""
+                  return "$host$path" + (if (q.isNotEmpty()) "?$q" else "")
               }
 
               private fun sameHost(a: String, b: String): Boolean {
@@ -3200,7 +3206,7 @@ jobs:
                   profile: String,
                   referer: String = ""
               ): HttpURLConnection {
-                  var url = start
+                  var url = start.trim().replace(" ", "%20")
                   for (hop in 0..10) {
                       val c = URL(url).openConnection() as HttpURLConnection
                       c.instanceFollowRedirects = false
@@ -3216,7 +3222,7 @@ jobs:
                       val code = c.responseCode
                       if (code in 300..399) {
                           val loc = c.getHeaderField("Location") ?: throw Exception("Bad redirect")
-                          url = URL(URL(url), loc).toString()
+                          url = URL(URL(url), loc).toString().replace(" ", "%20")
                           c.disconnect()
                           continue
                       }
