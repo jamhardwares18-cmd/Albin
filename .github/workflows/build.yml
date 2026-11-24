@@ -143,6 +143,7 @@ jobs:
 
               <application
                   android:allowBackup="true"
+                  android:largeHeap="true"
                   android:usesCleartextTraffic="true"
                   android:label="abh browser"
                   android:icon="@mipmap/ic_launcher"
@@ -442,18 +443,18 @@ jobs:
               var thumb: Bitmap? = null
           }
 
-          class DlItem(var title: String, var state: Int, var progress: Int, var uri: String?, var mime: String?, var msg: String) {
+          class DlItem(var title: String, @Volatile var state: Int, @Volatile var progress: Int, var uri: String?, var mime: String?, @Volatile var msg: String) {
               var name: String = ""
-              var id: String = System.nanoTime().toString()
+              var id: String = nextDlId()
               var kind = 0            // 0 = yt-dlp (video/audio), 1 = direct file link
               var link = ""
               var page = ""
               var audio = false
               var fmt = ""
               var ua: String? = null
-              var total = 0L
-              var done = 0L
-              var sizeLabel = ""
+              @Volatile var total = 0L
+              @Volatile var done = 0L
+              @Volatile var sizeLabel = ""
               @Volatile var stop = 0  // 1 = pause, 2 = cancel/delete
               @Volatile var gen = 0
               var vid = ""
@@ -465,9 +466,21 @@ jobs:
               var expectAudio = false
           }
 
+          private val dlIdSeq = AtomicLong(System.currentTimeMillis() * 1000L)
+          fun nextDlId(): String = dlIdSeq.incrementAndGet().toString()
+
           class Q(val label: String, val fmt: String, val audio: Boolean, val bytes: Long, val key: String, val tag: String)
           class FoundLink(val url: String, val name: String)
           class ScanResult(val audios: List<FoundLink>, val folders: List<FoundLink>)
+
+          class DlHolder(
+              val title: TextView,
+              val sub: TextView,
+              val pb: ProgressBar,
+              val btnAct: TextView,
+              val btnOpen: TextView,
+              val btnDel: TextView
+          )
 
           val SIZE_RE = Regex("([0-9.]+)%\\s+of\\s+~?\\s*([0-9.]+\\s*[KMGT]?i?B)")
           val AUDIO_EXTS = setOf("mp3", "m4a", "flac", "wav", "aac", "ogg", "opus")
@@ -485,6 +498,7 @@ jobs:
 
               private val tabs = mutableListOf<Tab>()
               private val items = mutableListOf<DlItem>()
+              private var shownCache: List<DlItem> = emptyList()
               private var cur = 0
               private var dlTab = 0
               @Volatile private var qPid = ""
@@ -499,9 +513,11 @@ jobs:
               @Volatile private var pendingClickName = ""
               @Volatile private var pendingClickTime = 0L
               private val lastUiUpdate = AtomicLong(0L)
+              private val savePending = AtomicBoolean(false)
               private val saveLock = Any()
               private val wvDlLock = Any()
               private val wvOnlyHosts = Collections.synchronizedSet(HashSet<String>())
+              private var activeBatchCancel: AtomicBoolean? = null
 
               private var dlWv: WebView? = null
               private var dlWvProfile = ""
@@ -523,6 +539,8 @@ jobs:
               private var fileCb: ValueCallback<Array<Uri>>? = null
               private val exec = Executors.newSingleThreadExecutor()
               private val directExec = Executors.newFixedThreadPool(3)
+              private val saveExec = Executors.newSingleThreadExecutor()
+              private val mainHandler = Handler(Looper.getMainLooper())
               private val prefs by lazy { getSharedPreferences("s", MODE_PRIVATE) }
 
               private lateinit var topBar: View
@@ -578,7 +596,7 @@ jobs:
                   dlList.adapter = dlAdapter
                   dlList.emptyView = findViewById(R.id.dlEmpty)
                   dlList.setOnItemClickListener { _, _, p, _ ->
-                      val d = shown().getOrNull(p)
+                      val d = shownCache.getOrNull(p)
                       if (d != null && d.state == 2) openFile(d)
                   }
 
@@ -698,6 +716,7 @@ jobs:
               }
 
               override fun onDestroy() {
+                  activeBatchCancel?.set(true)
                   try { dlWv?.destroy() } catch (e: Exception) { }
                   dlWv = null
                   super.onDestroy()
@@ -1676,8 +1695,23 @@ jobs:
                       try {
                           val conn = openFollow(url, ua, 0L, profile, referer)
                           try {
+                              val ct = (conn.contentType ?: "").lowercase(Locale.US)
+                              if (ct.isNotEmpty() && !ct.contains("html") && !ct.contains("text") && !ct.contains("xml")) {
+                                  throw Exception("Not an HTML folder page")
+                              }
                               val finalUrl = conn.url.toString()
-                              val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                              val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
+                                  val buf = CharArray(65536)
+                                  val sb = StringBuilder()
+                                  var total = 0
+                                  while (total < 1500000) {
+                                      val n = r.read(buf)
+                                      if (n < 0) break
+                                      sb.append(buf, 0, n)
+                                      total += n
+                                  }
+                                  sb.toString()
+                              }
                               if (!isChallengeHtml(html)) {
                                   return finalUrl to Jsoup.parse(html, finalUrl)
                               }
@@ -1706,7 +1740,6 @@ jobs:
                   var resHtml = ""
                   var resErr: String? = null
                   val holder = arrayOfNulls<WebView>(1)
-                  val handler = Handler(Looper.getMainLooper())
 
                   fun cleanup(wv: WebView?) {
                       if (wv != null) {
@@ -1737,7 +1770,7 @@ jobs:
                               }
                           } catch (e: Exception) { }
                           if ((h.length < 150 || isChallengeHtml(h)) && attempt < 6 && !cancelled.get()) {
-                              handler.postDelayed({ extract(wv, attempt + 1) }, 1200)
+                              mainHandler.postDelayed({ extract(wv, attempt + 1) }, 1200)
                           } else {
                               if (done.compareAndSet(false, true)) {
                                   resUrl = u
@@ -1765,7 +1798,7 @@ jobs:
                           wv.webViewClient = object : WebViewClient() {
                               override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                                   if (done.get()) return
-                                  handler.postDelayed({
+                                  mainHandler.postDelayed({
                                       if (!done.get() && view != null) extract(view, 0)
                                   }, 350)
                               }
@@ -2028,7 +2061,9 @@ jobs:
                   if (firstRes.audios.isNotEmpty()) {
                       enqueueAudioList(firstRes.audios, rootFolder, rootUrl, ua, profile, false)
                   }
+                  activeBatchCancel?.set(true)
                   val batchCancelled = AtomicBoolean(false)
+                  activeBatchCancel = batchCancelled
                   Thread {
                       var queuedSongs = firstRes.audios.size
                       var scannedCount = 0
@@ -2039,13 +2074,14 @@ jobs:
                       for (sf in firstRes.folders) {
                           queue.addLast(sf to sanitizeFolder("$rootFolder/${sf.name}"))
                       }
-                      while (queue.isNotEmpty() && scannedCount < 200 && queuedSongs < 3000) {
+                      while (!batchCancelled.get() && queue.isNotEmpty() && scannedCount < 200 && queuedSongs < 3000) {
                           val (folderLink, folderPath) = queue.removeFirst()
                           val nf = normUrl(folderLink.url)
                           if (!visited.add(nf)) continue
                           scannedCount++
                           try {
                               val (subFinal, subDoc) = fetchHtml(folderLink.url, ua, profile, rootUrl, batchCancelled)
+                              if (batchCancelled.get()) break
                               visited.add(normUrl(subFinal))
                               val subRes = analyzePage(subDoc, subFinal, visited)
                               if (subRes.audios.isNotEmpty()) {
@@ -2056,7 +2092,9 @@ jobs:
                                   if (uniqueAudios.isNotEmpty()) {
                                       queuedSongs += uniqueAudios.size
                                       runOnUiThread {
-                                          enqueueAudioList(uniqueAudios, folderPath, subFinal, ua, profile, false)
+                                          if (!batchCancelled.get()) {
+                                              enqueueAudioList(uniqueAudios, folderPath, subFinal, ua, profile, false)
+                                          }
                                       }
                                   }
                               }
@@ -2072,8 +2110,10 @@ jobs:
                               }
                           } catch (e: Exception) { }
                       }
-                      runOnUiThread {
-                          toast("Queued $queuedSongs songs in $rootFolder")
+                      if (!batchCancelled.get()) {
+                          runOnUiThread {
+                              toast("Queued $queuedSongs songs in $rootFolder")
+                          }
                       }
                   }.start()
               }
@@ -2126,8 +2166,8 @@ jobs:
                       flyToDownload()
                       toast("Added ${audios.size} songs to Downloads")
                   }
-                  saveItems()
-                  refreshDl()
+                  scheduleSaveItems()
+                  if (dlPage.visibility == View.VISIBLE) refreshDl()
                   for (d in toRun) {
                       d.stop = 0
                       d.state = 0
@@ -2143,6 +2183,7 @@ jobs:
                   super.onStop()
                   if (tabs.getOrNull(cur) != null) captureThumb(tabs[cur])
                   saveTabs()
+                  saveItemsAsync()
               }
 
               private fun saveTabs() {
@@ -2247,7 +2288,7 @@ jobs:
 
               private fun deleteProfileLater(name: String) {
                   if (name.isEmpty() || !multiProfile) return
-                  Handler(Looper.getMainLooper()).postDelayed({
+                  mainHandler.postDelayed({
                       try { ProfileStore.getInstance().deleteProfile(name) } catch (e: Exception) { }
                   }, 2000)
               }
@@ -2258,6 +2299,7 @@ jobs:
                   setBarsHidden(false)
                   p.visibility = View.VISIBLE
                   if (p === setPage) updateSettingsUi()
+                  if (p === dlPage) refreshDl()
                   updateFab()
               }
 
@@ -2319,7 +2361,6 @@ jobs:
                   var sy = 0f
                   var drag = false
                   var moved = false
-                  val h = Handler(Looper.getMainLooper())
                   val longPress = Runnable {
                       drag = true
                       fab.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -2331,11 +2372,11 @@ jobs:
                               sx = e.rawX; sy = e.rawY
                               dx = v.x - e.rawX; dy = v.y - e.rawY
                               drag = false; moved = false
-                              h.postDelayed(longPress, 400)
+                              mainHandler.postDelayed(longPress, 400)
                           }
                           MotionEvent.ACTION_MOVE -> {
                               if (!drag && (abs(e.rawX - sx) > 20 || abs(e.rawY - sy) > 20)) {
-                                  h.removeCallbacks(longPress)
+                                  mainHandler.removeCallbacks(longPress)
                                   moved = true
                               }
                               if (drag) {
@@ -2345,13 +2386,13 @@ jobs:
                               }
                           }
                           MotionEvent.ACTION_UP -> {
-                              h.removeCallbacks(longPress)
+                              mainHandler.removeCallbacks(longPress)
                               v.animate().scaleX(1f).scaleY(1f).setDuration(100).start()
                               if (!drag && !moved) askDownload()
                               drag = false
                           }
                           MotionEvent.ACTION_CANCEL -> {
-                              h.removeCallbacks(longPress)
+                              mainHandler.removeCallbacks(longPress)
                               v.animate().scaleX(1f).scaleY(1f).setDuration(100).start()
                               drag = false
                           }
@@ -2446,6 +2487,7 @@ jobs:
                       dlg().setTitle("Clear downloading list?")
                           .setMessage("Remove all ${active.size} active/failed items?")
                           .setPositiveButton("Clear") { _, _ ->
+                              activeBatchCancel?.set(true)
                               for (d in active) {
                                   d.stop = 2
                                   d.gen++
@@ -2455,7 +2497,7 @@ jobs:
                                   File(filesDir, "parts/" + d.id).deleteRecursively()
                               }
                               items.removeAll { it.state != 2 }
-                              saveItems()
+                              saveItemsAsync()
                               refreshDl()
                               toast("Cleared")
                           }
@@ -2468,7 +2510,7 @@ jobs:
                           .setMessage("Remove ${done.size} items from this list? (Files on your phone will stay)")
                           .setPositiveButton("Clear") { _, _ ->
                               items.removeAll { it.state == 2 }
-                              saveItems()
+                              saveItemsAsync()
                               refreshDl()
                               toast("Cleared")
                           }
@@ -2692,7 +2734,7 @@ jobs:
                   d.state = 0
                   d.gen++
                   val g = d.gen
-                  refreshDl()
+                  if (dlPage.visibility == View.VISIBLE) refreshDl()
                   if (d.kind == 0) {
                       val ck = cookieText(d.link, d.profile)
                       exec.execute { runDownload(d, ck, g) }
@@ -2707,7 +2749,7 @@ jobs:
                       try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }
                   }
                   d.state = 4
-                  saveItems()
+                  scheduleSaveItems()
                   refreshDl()
               }
 
@@ -2736,7 +2778,7 @@ jobs:
                   }
                   File(filesDir, "parts/" + d.id).deleteRecursively()
                   items.remove(d)
-                  saveItems()
+                  scheduleSaveItems()
                   refreshDl()
                   toast("Deleted")
               }
@@ -2766,17 +2808,20 @@ jobs:
               }
 
               private fun ui() {
+                  if (dlPage.visibility != View.VISIBLE) return
                   val now = System.currentTimeMillis()
                   val prev = lastUiUpdate.get()
-                  if (now - prev >= 300 && lastUiUpdate.compareAndSet(prev, now)) {
-                      runOnUiThread { refreshDl() }
+                  if (now - prev >= 450 && lastUiUpdate.compareAndSet(prev, now)) {
+                      runOnUiThread {
+                          if (dlPage.visibility == View.VISIBLE) refreshDl()
+                      }
                   }
               }
 
               private fun runDownload(d: DlItem, cookies: String?, g: Int) {
                   if (d.stop != 0 || d.gen != g) return
                   d.state = 1
-                  runOnUiThread { refreshDl() }
+                  ui()
                   val dir = File(filesDir, "parts/" + d.id)
                   val cf = File(cacheDir, "cookies" + d.id + ".txt")
                   try {
@@ -2950,10 +2995,22 @@ jobs:
                   } catch (e: Exception) { }
               }
 
-              private fun shown(): List<DlItem> = items.filter { (it.state != 2) == (dlTab == 0) }
-
               private fun refreshDl() {
-                  val active = items.count { it.state != 2 }
+                  var active = 0
+                  var hasFailed = false
+                  var hasPaused = false
+                  val filtered = ArrayList<DlItem>()
+                  val wantActive = dlTab == 0
+                  for (d in items) {
+                      val isDone = d.state == 2
+                      if (!isDone) {
+                          active++
+                          if (d.state == 3) hasFailed = true
+                          else if (d.state == 4) hasPaused = true
+                      }
+                      if (isDone != wantActive) filtered.add(d)
+                  }
+                  shownCache = filtered
                   val done = items.size - active
                   val a = findViewById<TextView>(R.id.tabActive)
                   val b = findViewById<TextView>(R.id.tabDone)
@@ -2966,8 +3023,6 @@ jobs:
                       v.background = if (sel) shape(col.card, 20) else null
                   }
                   val retryBtn = findViewById<TextView>(R.id.dlRetryAll)
-                  val hasFailed = items.any { it.state == 3 }
-                  val hasPaused = items.any { it.state == 4 }
                   if (dlTab == 0 && (hasFailed || hasPaused)) {
                       retryBtn.text = if (hasFailed && !hasPaused) "Retry all" else "Resume all"
                       retryBtn.visibility = View.VISIBLE
@@ -2981,8 +3036,8 @@ jobs:
 
               private fun finishItem(d: DlItem) {
                   if (d.state == 2) items.removeAll { it !== d && it.state == 2 && it.name == d.name && it.folder == d.folder }
-                  saveItems()
-                  refreshDl()
+                  scheduleSaveItems()
+                  if (dlPage.visibility == View.VISIBLE) refreshDl()
               }
 
               // Small download icon flies to the top-right download button.
@@ -3311,14 +3366,13 @@ jobs:
                       })($tokLiteral);
                       """.trimIndent()
 
-                      val handler = Handler(Looper.getMainLooper())
                       fun tryStartFetch(wv: WebView, attempt: Int) {
                           if (wvFinished.get() || d.stop != 0 || d.gen != g || wvToken != token) return
                           wv.evaluateJavascript("document.documentElement.outerHTML.slice(0,2500)") { raw ->
                               if (wvFinished.get() || wvToken != token) return@evaluateJavascript
                               val snippet = (JSONTokener(raw).nextValue() as? String) ?: ""
                               if ((snippet.length < 100 || isChallengeHtml(snippet)) && attempt < 6) {
-                                  handler.postDelayed({ tryStartFetch(wv, attempt + 1) }, 1200)
+                                  mainHandler.postDelayed({ tryStartFetch(wv, attempt + 1) }, 1200)
                               } else {
                                   wvLastAct.set(System.currentTimeMillis())
                                   wv.evaluateJavascript(fetchJs, null)
@@ -3346,7 +3400,7 @@ jobs:
                                   wv.webViewClient = object : WebViewClient() {
                                       override fun onPageFinished(view: WebView?, url: String?) {
                                           if (wvFinished.get() || wvToken != token) return
-                                          handler.postDelayed({
+                                          mainHandler.postDelayed({
                                               if (!wvFinished.get() && wvToken == token && view != null) tryStartFetch(view, 0)
                                           }, 300)
                                       }
@@ -3393,7 +3447,7 @@ jobs:
               private fun runDirect(d: DlItem, g: Int) {
                   if (d.stop != 0 || d.gen != g) return
                   d.state = 1
-                  runOnUiThread { refreshDl() }
+                  ui()
                   val dir = File(filesDir, "parts/" + d.id)
                   try {
                       dir.mkdirs()
@@ -3509,7 +3563,7 @@ jobs:
                   }
               }
 
-              private fun saveItems() {
+              private fun snapshotJson(): String {
                   val a = JSONArray()
                   for (d in items) {
                       val st = if (d.state == 0 || d.state == 1) 4 else d.state
@@ -3522,12 +3576,34 @@ jobs:
                               .put("fd", d.folder).put("cn", d.customName).put("ea", d.expectAudio)
                       )
                   }
-                  prefs.edit().putString("dl", a.toString()).apply()
+                  return a.toString()
+              }
+
+              private fun saveItemsAsync() {
+                  val json = try { snapshotJson() } catch (e: Exception) { return }
+                  saveExec.execute {
+                      try {
+                          val tmp = File(filesDir, "dl.json.tmp")
+                          tmp.writeText(json, Charsets.UTF_8)
+                          tmp.renameTo(File(filesDir, "dl.json"))
+                      } catch (e: Exception) { }
+                  }
+              }
+
+              private fun scheduleSaveItems() {
+                  if (savePending.compareAndSet(false, true)) {
+                      mainHandler.postDelayed({
+                          savePending.set(false)
+                          saveItemsAsync()
+                      }, 2500)
+                  }
               }
 
               private fun loadItems() {
                   try {
-                      val a = JSONArray(prefs.getString("dl", "[]"))
+                      val f = File(filesDir, "dl.json")
+                      val raw = if (f.exists()) f.readText(Charsets.UTF_8) else prefs.getString("dl", "[]")
+                      val a = JSONArray(raw)
                       for (i in 0 until a.length()) {
                           val o = a.getJSONObject(i)
                           var st = o.getInt("s")
@@ -3596,41 +3672,72 @@ jobs:
               }
 
               inner class DlAdapter : BaseAdapter() {
-                  override fun getCount() = shown().size
-                  override fun getItem(position: Int): Any = shown()[position]
+                  override fun getCount() = shownCache.size
+                  override fun getItem(position: Int): Any = shownCache[position]
                   override fun getItemId(position: Int) = position.toLong()
                   override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-                      val d = shown()[position]
-                      val box = LinearLayout(this@MainActivity)
-                      box.orientation = LinearLayout.VERTICAL
-                      box.setPadding(dp(16), dp(12), dp(16), dp(8))
-                      val t = TextView(this@MainActivity)
-                      t.text = d.title
-                      t.textSize = 16f
-                      t.maxLines = 2
-                      t.setTextColor(col.text)
-                      val s = TextView(this@MainActivity)
-                      s.text = (if (d.folder.isNotEmpty()) d.folder + "\n" else "") + statusText(d)
-                      s.textSize = 13f
-                      s.setTextColor(col.sec)
-                      box.addView(t)
-                      box.addView(s)
-                      if (d.state == 0 || d.state == 1 || d.state == 4) {
+                      val d = shownCache[position]
+                      val box: LinearLayout
+                      val h: DlHolder
+                      if (convertView == null) {
+                          box = LinearLayout(this@MainActivity)
+                          box.orientation = LinearLayout.VERTICAL
+                          box.setPadding(dp(16), dp(12), dp(16), dp(8))
+                          val t = TextView(this@MainActivity)
+                          t.textSize = 16f
+                          t.maxLines = 2
+                          val s = TextView(this@MainActivity)
+                          s.textSize = 13f
                           val pb = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal)
                           pb.max = 100
-                          pb.progress = d.progress
+                          val row = LinearLayout(this@MainActivity)
+                          row.orientation = LinearLayout.HORIZONTAL
+                          val btnAct = act("") { }
+                          val btnOpen = act("Open page") { }
+                          val btnDel = act("Delete", 0xFFE5534B.toInt()) { }
+                          row.addView(btnAct)
+                          row.addView(btnOpen)
+                          row.addView(btnDel)
+                          box.addView(t)
+                          box.addView(s)
                           box.addView(pb)
+                          box.addView(row)
+                          h = DlHolder(t, s, pb, btnAct, btnOpen, btnDel)
+                          box.tag = h
+                      } else {
+                          box = convertView as LinearLayout
+                          h = box.tag as DlHolder
                       }
-                      val row = LinearLayout(this@MainActivity)
-                      row.orientation = LinearLayout.HORIZONTAL
+                      h.title.setTextColor(col.text)
+                      h.title.text = d.title
+                      h.sub.setTextColor(col.sec)
+                      h.sub.text = (if (d.folder.isNotEmpty()) d.folder + "\n" else "") + statusText(d)
+                      if (d.state == 0 || d.state == 1 || d.state == 4) {
+                          h.pb.visibility = View.VISIBLE
+                          h.pb.progress = d.progress
+                      } else {
+                          h.pb.visibility = View.GONE
+                      }
                       when (d.state) {
-                          0, 1 -> row.addView(act("Pause") { pauseItem(d) })
-                          4 -> row.addView(act("Resume") { startRun(d) })
-                          3 -> row.addView(act("Retry") { startRun(d) })
+                          0, 1 -> {
+                              h.btnAct.visibility = View.VISIBLE
+                              h.btnAct.text = "Pause"
+                              h.btnAct.setOnClickListener { pauseItem(d) }
+                          }
+                          4 -> {
+                              h.btnAct.visibility = View.VISIBLE
+                              h.btnAct.text = "Resume"
+                              h.btnAct.setOnClickListener { startRun(d) }
+                          }
+                          3 -> {
+                              h.btnAct.visibility = View.VISIBLE
+                              h.btnAct.text = "Retry"
+                              h.btnAct.setOnClickListener { startRun(d) }
+                          }
+                          else -> h.btnAct.visibility = View.GONE
                       }
-                      row.addView(act("Open page") { openPage(d) })
-                      row.addView(act("Delete", 0xFFE5534B.toInt()) { askDelete(d) })
-                      box.addView(row)
+                      h.btnOpen.setOnClickListener { openPage(d) }
+                      h.btnDel.setOnClickListener { askDelete(d) }
                       return box
                   }
               }
@@ -3686,4 +3793,3 @@ jobs:
         with:
           name: abh-browser-APK
           path: app/build/outputs/apk/debug/*.apk
-          
