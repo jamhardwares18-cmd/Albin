@@ -1655,9 +1655,45 @@ jobs:
                                   toast("No MP3 files or subfolders found in $cleanName")
                               } else if (res.folders.isNotEmpty()) {
                                   val hasAudios = res.audios.isNotEmpty()
+                                  val singleLetters = res.folders
+                                      .filter { it.name.length == 1 && it.name[0] in 'A'..'Z' }
+                                      .map { it.name[0] }
+                                      .toSet()
+                                  val missingLetters = ('A'..'Z').filter { it !in singleLetters }
+                                  val isAzIndex = singleLetters.size >= 15 && missingLetters.size == 1
+                                  val activeLetter = if (isAzIndex) missingLetters[0].toString() else ""
+                                  val azItems = mutableListOf<Pair<String, FoundLink?>>()
+                                  val activeSubfolders = mutableListOf<FoundLink>()
+                                  if (isAzIndex) {
+                                      val letterLinks = HashMap<Char, FoundLink>()
+                                      var otherLink: FoundLink? = null
+                                      for (f in res.folders) {
+                                          if (f.name.length == 1 && f.name[0] in 'A'..'Z') {
+                                              if (f.name[0] !in letterLinks) letterLinks[f.name[0]] = f
+                                          } else if (f.name.equals("Other", ignoreCase = true)) {
+                                              if (otherLink == null) otherLink = f
+                                          } else {
+                                              activeSubfolders.add(f)
+                                          }
+                                      }
+                                      for (ch in 'A'..'Z') {
+                                          if (ch == missingLetters[0]) {
+                                              if (activeSubfolders.isNotEmpty()) azItems.add(activeLetter to null)
+                                          } else {
+                                              val lf = letterLinks[ch]
+                                              if (lf != null) azItems.add(lf.name to lf)
+                                          }
+                                      }
+                                      if (otherLink != null) azItems.add(otherLink.name to otherLink)
+                                  }
+
                                   val choiceLabels = mutableListOf<String>()
                                   if (hasAudios) choiceLabels.add("Songs in this folder (${res.audios.size})")
-                                  for (f in res.folders) choiceLabels.add(f.name)
+                                  if (isAzIndex) {
+                                      for ((lab, _) in azItems) choiceLabels.add(lab)
+                                  } else {
+                                      for (f in res.folders) choiceLabels.add(f.name)
+                                  }
                                   val checked = BooleanArray(choiceLabels.size) { false }
                                   val alert = dlg().setTitle(cleanName)
                                       .setMultiChoiceItems(choiceLabels.toTypedArray(), checked) { d, which, isChecked ->
@@ -1668,17 +1704,34 @@ jobs:
                                           val includeAudios = hasAudios && checked[0]
                                           val offset = if (hasAudios) 1 else 0
                                           val pickedFolders = mutableListOf<FoundLink>()
+                                          val preloadedSubs = mutableListOf<FoundLink>()
                                           val skippedUrls = HashSet<String>()
-                                          for (i in res.folders.indices) {
-                                              if (checked[i + offset]) pickedFolders.add(res.folders[i])
-                                              else skippedUrls.add(normUrl(res.folders[i].url))
+                                          if (isAzIndex) {
+                                              for (i in azItems.indices) {
+                                                  val (_, linkObj) = azItems[i]
+                                                  val isPicked = checked[i + offset]
+                                                  if (linkObj == null) {
+                                                      if (isPicked) preloadedSubs.addAll(activeSubfolders)
+                                                      else for (sf in activeSubfolders) skippedUrls.add(normUrl(sf.url))
+                                                  } else {
+                                                      if (isPicked) pickedFolders.add(linkObj)
+                                                      else skippedUrls.add(normUrl(linkObj.url))
+                                                  }
+                                              }
+                                          } else {
+                                              for (i in res.folders.indices) {
+                                                  if (checked[i + offset]) pickedFolders.add(res.folders[i])
+                                                  else skippedUrls.add(normUrl(res.folders[i].url))
+                                              }
                                           }
-                                          if (includeAudios || pickedFolders.isNotEmpty()) {
+                                          if (includeAudios || pickedFolders.isNotEmpty() || preloadedSubs.isNotEmpty()) {
                                               startFolderBatch(
                                                   cleanName,
                                                   finalUrl,
                                                   if (includeAudios) res.audios else emptyList(),
                                                   pickedFolders,
+                                                  activeLetter,
+                                                  preloadedSubs,
                                                   skippedUrls,
                                                   ignore,
                                                   webUa,
@@ -2097,14 +2150,17 @@ jobs:
                   rootUrl: String,
                   rootAudios: List<FoundLink>,
                   selectedFolders: List<FoundLink>,
+                  preloadedPrefix: String,
+                  preloadedSubs: List<FoundLink>,
                   skippedUrls: Set<String>,
                   templateLinks: Set<String>,
                   ua: String?,
                   profile: String
               ) {
                   val cleanRoot = sanitizeFolder(rootFolder)
-                  val msg = if (selectedFolders.isNotEmpty()) {
-                      "Scanning ${selectedFolders.size} folder(s) & starting downloads..."
+                  val totalPicked = selectedFolders.size + (if (preloadedSubs.isNotEmpty()) 1 else 0)
+                  val msg = if (totalPicked > 0) {
+                      "Scanning $totalPicked folder(s) & starting downloads..."
                   } else {
                       "Starting ${rootAudios.size} song download(s)..."
                   }
@@ -2114,7 +2170,7 @@ jobs:
                   if (rootAudios.isNotEmpty()) {
                       enqueueAudioList(rootAudios, cleanRoot, rootUrl, ua, profile, false)
                   }
-                  if (selectedFolders.isEmpty()) return
+                  if (selectedFolders.isEmpty() && preloadedSubs.isEmpty()) return
                   activeBatchCancel?.set(true)
                   val batchCancelled = AtomicBoolean(false)
                   activeBatchCancel = batchCancelled
@@ -2127,6 +2183,9 @@ jobs:
                       val seenSongKeys = HashSet<String>()
                       val rootSlash = cleanRoot.count { it == '/' }
                       val queue = ArrayDeque<Triple<FoundLink, String, String>>()
+                      for (sf in preloadedSubs) {
+                          queue.addLast(Triple(sf, sanitizeFolder("$cleanRoot/$preloadedPrefix/${sf.name}"), rootUrl))
+                      }
                       for (sf in selectedFolders) {
                           queue.addLast(Triple(sf, sanitizeFolder("$cleanRoot/${sf.name}"), rootUrl))
                       }
@@ -2155,11 +2214,12 @@ jobs:
                                   }
                               }
                               val isLetterTab = folderLink.name.length == 1 || folderLink.name.equals("Other", ignoreCase = true)
+                              val hasAzBar = subRes.folders.count { it.name.length == 1 && it.name[0] in 'A'..'Z' } >= 10
                               if (subRes.folders.isNotEmpty()) {
                                   val relDepth = folderPath.count { it == '/' } - rootSlash
                                   if (relDepth < 6) {
                                       for (sub2 in subRes.folders) {
-                                          if (isLetterTab && (sub2.name.length == 1 || sub2.name.equals("Other", ignoreCase = true))) continue
+                                          if ((isLetterTab || hasAzBar) && (sub2.name.length == 1 || sub2.name.equals("Other", ignoreCase = true))) continue
                                           if (normUrl(sub2.url) !in visited) {
                                               queue.addLast(Triple(sub2, sanitizeFolder("$folderPath/${sub2.name}"), subFinal))
                                           }
