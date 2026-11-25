@@ -367,6 +367,7 @@ jobs:
           import android.os.Parcel
           import android.provider.DocumentsContract
           import android.provider.MediaStore
+          import android.text.InputType
           import android.text.TextUtils
           import android.util.Base64
           import android.view.ContextThemeWrapper
@@ -388,6 +389,7 @@ jobs:
           import android.webkit.WebView
           import android.webkit.WebViewClient
           import android.widget.BaseAdapter
+          import android.widget.CheckBox
           import android.widget.EditText
           import android.widget.FrameLayout
           import android.widget.GridView
@@ -397,6 +399,7 @@ jobs:
           import android.widget.ListView
           import android.widget.PopupMenu
           import android.widget.ProgressBar
+          import android.widget.ScrollView
           import android.widget.TextView
           import android.widget.Toast
           import androidx.webkit.ProfileStore
@@ -434,6 +437,7 @@ jobs:
           const val MOBILE_UA = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
           const val REQ_FILE = 77
           const val REQ_TREE = 78
+          const val REQ_GH_TREE = 79
 
           class HttpCodeException(val code: Int) : Exception("Server returned HTTP $code")
 
@@ -518,6 +522,13 @@ jobs:
               private val wvDlLock = Any()
               private val wvOnlyHosts = Collections.synchronizedSet(HashSet<String>())
               private var activeBatchCancel: AtomicBoolean? = null
+
+              private var ghRepo = ""
+              private var ghBranch = ""
+              private var ghSubpath = ""
+              private var ghMsg = "Upload folder"
+              private var ghToken = ""
+              private var ghKeepRoot = true
 
               private var dlWv: WebView? = null
               private var dlWvProfile = ""
@@ -1224,7 +1235,6 @@ jobs:
               }
 
               @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
-              // profile = null: brand new separate login space. profile = "": the shared default one.
               private fun newTab(profile: String? = null) {
                   val w = WebView(this)
                   var pname = profile ?: (if (multiProfile) "t" + System.currentTimeMillis() + tabs.size else "")
@@ -1590,7 +1600,7 @@ jobs:
                   }
               }
 
-              // ---------- folder & MP3 scanner (works across sites, with WebView fallback on 403/409/CF) ----------
+              // ---------- folder & MP3 scanner ----------
 
               private fun handleLongPressLink(
                   url: String,
@@ -2024,7 +2034,6 @@ jobs:
                       return true
                   }
 
-                  // 1. Direct audio links
                   for (a in doc.select("a[href]")) {
                       val h = a.absUrl("href").substringBefore('#').trim()
                       if (!h.startsWith("http") || !isAudioUrl(h)) continue
@@ -2034,13 +2043,11 @@ jobs:
                       addAudio(h, t, row, a)
                   }
 
-                  // 2. <audio> / <source> tags
                   for (el in doc.select("audio[src], source[src]")) {
                       val h = el.absUrl("src")
                       if (isAudioUrl(h)) addAudio(h, "", findSingleSongRow(el), el)
                   }
 
-                  // 3. Embedded audio URLs in onclick / data-* attributes
                   val mp3Re = Regex("https?://[^'\"\\s)]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"\\s)]*)?", RegexOption.IGNORE_CASE)
                   val relMp3Re = Regex("['\"]([^'\"]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"]*)?)['\"]", RegexOption.IGNORE_CASE)
                   for (el in doc.select("[onclick], [data-src], [data-url], [data-file], [data-mp3], [data-audio]")) {
@@ -2065,7 +2072,6 @@ jobs:
                       }
                   }
 
-                  // 4. Song rows with download-icon links (only single-song rows not handled in steps 1-3)
                   val sizeInRowRe = Regex("\\b[0-9]+(\\.[0-9]+)?\\s*(mb|kb|gb)\\b", RegexOption.IGNORE_CASE)
                   for (row in doc.select("tr, li, div, p")) {
                       if (row in handledRows) continue
@@ -2097,7 +2103,6 @@ jobs:
                       }
                   }
 
-                  // 5. Inline <script> playlists (e.g. jPlayer Jukebox)
                   val scriptMp3Re = Regex("['\"]([^'\"\\s<>]+\\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\\?[^'\"\\s<>]*)?)['\"]", RegexOption.IGNORE_CASE)
                   for (sc in doc.select("script")) {
                       val st = sc.data()
@@ -2111,7 +2116,6 @@ jobs:
                       }
                   }
 
-                  // 6. Subfolder links (if songs exist on this page, only keep strict child folders / folder-icon links)
                   val folders = mutableListOf<FoundLink>()
                   val seenFolders = HashSet<String>()
                   val hasAudios = audios.isNotEmpty()
@@ -2189,7 +2193,7 @@ jobs:
                       for (sf in selectedFolders) {
                           queue.addLast(Triple(sf, sanitizeFolder("$cleanRoot/${sf.name}"), rootUrl))
                       }
-                      while (!batchCancelled.get() && queue.isNotEmpty() && scannedCount < 200 && queuedSongs < 3000) {
+                      while (!batchCancelled.get() && queue.isNotEmpty() && scannedCount < 2000 && queuedSongs < 10000) {
                           val (folderLink, folderPath, refUrl) = queue.removeFirst()
                           val nf = normUrl(folderLink.url)
                           if (!visited.add(nf)) continue
@@ -2295,6 +2299,228 @@ jobs:
                   }
               }
 
+              // ---------- GitHub folder + subfolder uploader ----------
+
+              private fun parseGithubUrl(rawUrl: String): Triple<String, String, String> {
+                  if (rawUrl.isEmpty()) return Triple("", "", "")
+                  val uri = Uri.parse(rawUrl)
+                  val host = (uri.host ?: "").lowercase(Locale.US)
+                  if (host != "github.com" && host != "www.github.com") return Triple("", "", "")
+                  val segs = uri.pathSegments ?: return Triple("", "", "")
+                  val reserved = setOf("settings", "marketplace", "explore", "notifications", "pulls", "issues", "new", "login", "signup", "orgs", "topics", "search", "trending")
+                  if (segs.size < 2 || segs[0].lowercase(Locale.US) in reserved) return Triple("", "", "")
+                  val repo = "${segs[0]}/${segs[1]}"
+                  var branch = ""
+                  var sub = ""
+                  if (segs.size >= 4 && (segs[2] == "tree" || segs[2] == "blob" || segs[2] == "upload")) {
+                      branch = segs[3]
+                      if (segs[2] == "tree" && segs.size > 4) sub = segs.drop(4).joinToString("/")
+                  }
+                  return Triple(repo, branch, sub)
+              }
+
+              private fun openGithubUploadDialog() {
+                  val curUrl = if (tabs.getOrNull(cur)?.home == false) (tabs[cur].web.url ?: "") else ""
+                  val (urlRepo, urlBranch, urlSub) = parseGithubUrl(curUrl)
+                  val box = LinearLayout(this)
+                  box.orientation = LinearLayout.VERTICAL
+                  box.setPadding(dp(20), dp(12), dp(20), dp(8))
+                  fun lbl(t: String) {
+                      val tv = TextView(this); tv.text = t; tv.textSize = 13f; tv.setTextColor(col.sec); tv.setPadding(0, dp(8), 0, dp(2)); box.addView(tv)
+                  }
+                  fun inp(hint: String, def: String, pass: Boolean = false): EditText {
+                      val et = EditText(this); et.hint = hint; et.setText(def); et.isSingleLine = true; et.setTextColor(col.text); et.setHintTextColor(col.sec)
+                      if (pass) et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                      box.addView(et); return et
+                  }
+                  lbl("Repository (owner/repo)")
+                  val etRepo = inp("e.g. username/my-repo", urlRepo.ifEmpty { prefs.getString("ghRepo", "") ?: "" })
+                  lbl("Branch (blank = repo default)")
+                  val etBranch = inp("e.g. main", urlBranch)
+                  lbl("Target subfolder in repo (optional)")
+                  val etSub = inp("blank = repo root", urlSub)
+                  lbl("Commit message")
+                  val etMsg = inp("Upload folder", "Upload folder")
+                  lbl("GitHub Token (saved on device)")
+                  val etToken = inp("ghp_... or github_pat_...", prefs.getString("ghToken", "") ?: "", true)
+                  val tokenHelp = TextView(this)
+                  tokenHelp.text = "Tap here to create a GitHub Token (Contents: Read & write)"
+                  tokenHelp.textSize = 12f; tokenHelp.setTextColor(0xFF2D7FF9.toInt()); tokenHelp.setPadding(0, dp(4), 0, dp(6)); box.addView(tokenHelp)
+                  val cbKeepRoot = CheckBox(this)
+                  cbKeepRoot.text = "Keep selected folder name (e.g. MyFolder/...)"; cbKeepRoot.isChecked = true; cbKeepRoot.setTextColor(col.text); box.addView(cbKeepRoot)
+                  val sv = ScrollView(this); sv.addView(box)
+                  val d = dlg().setTitle("Upload folder to GitHub").setView(sv)
+                      .setPositiveButton("Choose folder") { _, _ ->
+                          var repo = etRepo.text.toString().trim().trim('/')
+                          if (repo.startsWith("http")) repo = parseGithubUrl(repo).first
+                          val tok = etToken.text.toString().trim()
+                          if (!repo.contains("/") || repo.split("/").size != 2) { toast("Enter repo as owner/repo"); return@setPositiveButton }
+                          if (tok.isEmpty()) { toast("Enter your GitHub Token"); return@setPositiveButton }
+                          ghRepo = repo; ghBranch = etBranch.text.toString().trim(); ghSubpath = sanitizeFolder(etSub.text.toString().trim())
+                          ghMsg = etMsg.text.toString().trim().ifEmpty { "Upload folder" }; ghToken = tok; ghKeepRoot = cbKeepRoot.isChecked
+                          prefs.edit().putString("ghRepo", repo).putString("ghToken", tok).apply()
+                          try { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_GH_TREE) } catch (e: Exception) { toast("Could not open folder picker") }
+                      }
+                      .setNegativeButton("Cancel", null).show()
+                  tokenHelp.setOnClickListener {
+                      d.dismiss(); newTab(); showTab(tabs.size - 1); open("https://github.com/settings/personal-access-tokens/new")
+                  }
+              }
+
+              private fun confirmGithubFolderUpload(treeUri: Uri) {
+                  val cancelled = AtomicBoolean(false)
+                  val wait = dlg().setTitle("Scanning folder...").setMessage("Reading files and subfolders...").setCancelable(true).setOnCancelListener { cancelled.set(true) }.show()
+                  Thread {
+                      try {
+                          val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+                          var rootName = "Folder"
+                          contentResolver.query(DocumentsContract.buildDocumentUriUsingTree(treeUri, rootId), arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+                              if (c.moveToFirst() && !c.getString(0).isNullOrBlank()) rootName = c.getString(0)
+                          }
+                          val files = mutableListOf<Triple<Uri, String, Long>>()
+                          val folderSet = HashSet<String>()
+                          fun walk(docId: String, prefix: String) {
+                              if (cancelled.get()) return
+                              contentResolver.query(
+                                  DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId),
+                                  arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE),
+                                  null, null, null
+                              )?.use { c ->
+                                  while (c.moveToNext() && !cancelled.get()) {
+                                      val id = c.getString(0) ?: continue; val name = c.getString(1) ?: continue; val mime = c.getString(2) ?: ""
+                                      val size = if (!c.isNull(3)) c.getLong(3) else 0L
+                                      if (name == ".git") continue
+                                      val rel = if (prefix.isEmpty()) name else "$prefix/$name"
+                                      if (mime == DocumentsContract.Document.MIME_TYPE_DIR) { folderSet.add(rel); walk(id, rel) }
+                                      else files.add(Triple(DocumentsContract.buildDocumentUriUsingTree(treeUri, id), rel, size))
+                                  }
+                              }
+                          }
+                          walk(rootId, "")
+                          if (cancelled.get()) return@Thread
+                          val basePrefix = listOfNotNull(ghSubpath.takeIf { it.isNotEmpty() }, if (ghKeepRoot) sanitizeName(rootName).takeIf { it.isNotEmpty() } else null).joinToString("/")
+                          val mapped = files.map { (u, rel, sz) -> Triple(u, if (basePrefix.isEmpty()) rel else "$basePrefix/$rel", sz) }
+                          runOnUiThread {
+                              if (cancelled.get() || !wait.isShowing) return@runOnUiThread
+                              wait.dismiss()
+                              if (mapped.isEmpty()) { toast("No files found in $rootName"); return@runOnUiThread }
+                              val brLabel = ghBranch.ifEmpty { "default" }; val dest = if (basePrefix.isEmpty()) "root" else basePrefix
+                              dlg().setTitle("Upload to GitHub?")
+                                  .setMessage("Folder: $rootName\nFiles: ${mapped.size} (subfolders: ${folderSet.size})\nRepo: $ghRepo ($brLabel)\nPath: /$dest")
+                                  .setPositiveButton("Upload") { _, _ -> runGithubUpload(mapped, ghRepo, ghBranch, ghMsg, ghToken) }
+                                  .setNegativeButton("Cancel", null).show()
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread { if (wait.isShowing) wait.dismiss(); if (!cancelled.get()) toast("Could not read folder: ${e.message}") }
+                      }
+                  }.start()
+              }
+
+              private fun ghApi(method: String, endpoint: String, token: String, body: String? = null): Pair<Int, String> {
+                  val c = URL("https://api.github.com$endpoint").openConnection() as HttpURLConnection
+                  c.requestMethod = method; c.connectTimeout = 20000; c.readTimeout = 45000
+                  c.setRequestProperty("Authorization", "Bearer $token"); c.setRequestProperty("Accept", "application/vnd.github+json")
+                  c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28"); c.setRequestProperty("User-Agent", "abh-browser")
+                  if (body != null) { c.doOutput = true; c.setRequestProperty("Content-Type", "application/json; charset=utf-8"); c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) } }
+                  val code = c.responseCode
+                  val resp = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                  c.disconnect()
+                  return code to resp
+              }
+
+              private fun ghErrMsg(body: String): String = try { JSONObject(body).optString("message") } catch (e: Exception) { "" }
+
+              private fun runGithubUpload(files: List<Triple<Uri, String, Long>>, repo: String, branchInput: String, commitMsg: String, token: String) {
+                  val cancelled = AtomicBoolean(false)
+                  val progDlg = dlg().setTitle("Uploading to GitHub").setMessage("Preparing...").setCancelable(false).setNegativeButton("Cancel") { _, _ -> cancelled.set(true) }.show()
+                  fun status(s: String) { runOnUiThread { if (progDlg.isShowing) progDlg.setMessage(s) } }
+                  Thread {
+                      try {
+                          val (rc, repoJsonStr) = ghApi("GET", "/repos/$repo", token)
+                          if (rc !in 200..299) throw Exception("Repo error ($rc): ${ghErrMsg(repoJsonStr).ifEmpty { "Check repo & token" }}")
+                          val repoObj = JSONObject(repoJsonStr)
+                          val branch = branchInput.ifEmpty { repoObj.optString("default_branch", "main").ifEmpty { "main" } }
+                          val encodedBranch = Uri.encode(branch)
+                          var startIdx = 0; var initializedCount = 0; var skippedBig = 0
+                          var (refCode, refStr) = ghApi("GET", "/repos/$repo/git/ref/heads/$encodedBranch", token)
+                          if (refCode == 404 || refCode == 409) {
+                              val isEmptyRepo = refCode == 409 || repoObj.optInt("size", 0) == 0
+                              if (!isEmptyRepo && branchInput.isNotEmpty()) throw Exception("Branch '$branch' not found")
+                              var initDone = false
+                              while (startIdx < files.size && !cancelled.get()) {
+                                  val (u, relPath, sz) = files[startIdx]; startIdx++
+                                  if (sz > 25L * 1024L * 1024L) { skippedBig++; continue }
+                                  val bytes = contentResolver.openInputStream(u)?.use { it.readBytes() } ?: continue
+                                  if (bytes.size > 25 * 1024 * 1024) { skippedBig++; continue }
+                                  status("Initializing repo (1/${files.size}):\n$relPath")
+                                  val encPath = relPath.split("/").joinToString("/") { Uri.encode(it) }
+                                  val putBody = JSONObject().put("message", commitMsg).put("content", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("branch", branch).toString()
+                                  val (pc, ps) = ghApi("PUT", "/repos/$repo/contents/$encPath", token, putBody)
+                                  if (pc !in 200..299) throw Exception("Upload failed ($pc): ${ghErrMsg(ps).ifEmpty { ps }}")
+                                  initDone = true; initializedCount = 1; break
+                              }
+                              if (cancelled.get()) throw Exception("Cancelled")
+                              if (!initDone) throw Exception("No readable files under 25 MB to upload")
+                              if (startIdx >= files.size) {
+                                  runOnUiThread {
+                                      if (progDlg.isShowing) progDlg.dismiss(); toast("Uploaded 1 file to $repo ($branch)")
+                                      if (tabs.getOrNull(cur)?.home == false && (tabs[cur].web.url ?: "").contains(repo, ignoreCase = true)) tabs[cur].web.reload()
+                                  }
+                                  return@Thread
+                              }
+                              val r2 = ghApi("GET", "/repos/$repo/git/ref/heads/$encodedBranch", token); refCode = r2.first; refStr = r2.second
+                          }
+                          if (refCode !in 200..299) throw Exception("Branch error ($refCode): ${ghErrMsg(refStr).ifEmpty { "Could not read branch $branch" }}")
+                          val headSha = JSONObject(refStr).getJSONObject("object").getString("sha")
+                          val (cc, commitStr) = ghApi("GET", "/repos/$repo/git/commits/$headSha", token)
+                          if (cc !in 200..299) throw Exception("Could not read latest commit ($cc)")
+                          var curTreeSha = JSONObject(commitStr).getJSONObject("tree").getString("sha")
+                          val treeEntries = mutableListOf<JSONObject>()
+                          for (i in startIdx until files.size) {
+                              if (cancelled.get()) throw Exception("Cancelled")
+                              val (u, relPath, sz) = files[i]
+                              if (sz > 25L * 1024L * 1024L) { skippedBig++; continue }
+                              status("Uploading ${i + 1}/${files.size}:\n$relPath")
+                              val bytes = contentResolver.openInputStream(u)?.use { it.readBytes() } ?: throw Exception("Cannot read $relPath")
+                              if (bytes.size > 25 * 1024 * 1024) { skippedBig++; continue }
+                              val blobBody = JSONObject().put("content", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("encoding", "base64").toString()
+                              val (bc, blobStr) = ghApi("POST", "/repos/$repo/git/blobs", token, blobBody)
+                              if (bc !in 200..299) throw Exception("Failed on $relPath ($bc): ${ghErrMsg(blobStr).ifEmpty { blobStr }}")
+                              treeEntries.add(JSONObject().put("path", relPath).put("mode", "100644").put("type", "blob").put("sha", JSONObject(blobStr).getString("sha")))
+                          }
+                          if (cancelled.get()) throw Exception("Cancelled")
+                          if (treeEntries.isEmpty()) throw Exception("No files uploaded (files > 25 MB are skipped)")
+                          status("Creating commit for ${treeEntries.size} file(s)...")
+                          var idx = 0
+                          while (idx < treeEntries.size) {
+                              if (cancelled.get()) throw Exception("Cancelled")
+                              val end = minOf(idx + 300, treeEntries.size)
+                              val arr = JSONArray(); for (j in idx until end) arr.put(treeEntries[j])
+                              val (tc, treeStr) = ghApi("POST", "/repos/$repo/git/trees", token, JSONObject().put("base_tree", curTreeSha).put("tree", arr).toString())
+                              if (tc !in 200..299) throw Exception("Tree error ($tc): ${ghErrMsg(treeStr).ifEmpty { treeStr }}")
+                              curTreeSha = JSONObject(treeStr).getString("sha"); idx = end
+                          }
+                          val (ncCode, ncStr) = ghApi("POST", "/repos/$repo/git/commits", token, JSONObject().put("message", commitMsg).put("tree", curTreeSha).put("parents", JSONArray().put(headSha)).toString())
+                          if (ncCode !in 200..299) throw Exception("Commit error ($ncCode): ${ghErrMsg(ncStr).ifEmpty { ncStr }}")
+                          val newCommitSha = JSONObject(ncStr).getString("sha")
+                          val (uc, uStr) = ghApi("PATCH", "/repos/$repo/git/refs/heads/$encodedBranch", token, JSONObject().put("sha", newCommitSha).put("force", false).toString())
+                          if (uc !in 200..299) throw Exception("Branch update error ($uc): ${ghErrMsg(uStr).ifEmpty { uStr }}")
+                          val uploadedCount = treeEntries.size + initializedCount
+                          runOnUiThread {
+                              if (progDlg.isShowing) progDlg.dismiss()
+                              toast("Uploaded $uploadedCount file(s) to $repo ($branch)" + if (skippedBig > 0) " ($skippedBig >25MB skipped)" else "")
+                              if (tabs.getOrNull(cur)?.home == false && (tabs[cur].web.url ?: "").contains(repo, ignoreCase = true)) tabs[cur].web.reload()
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              if (progDlg.isShowing) progDlg.dismiss()
+                              if (!cancelled.get()) dlg().setTitle("Upload failed").setMessage((e.message ?: "Unknown error").take(500)).setPositiveButton("OK", null).show()
+                              else toast("Upload cancelled")
+                          }
+                      }
+                  }.start()
+              }
+
               // ---------- keep tabs when the app is closed / reopened ----------
 
               override fun onStop() {
@@ -2390,7 +2616,6 @@ jobs:
                   return CookieManager.getInstance()
               }
 
-              // Remove the stored logins of tabs that no longer exist.
               private fun cleanupProfiles() {
                   if (!multiProfile) return
                   try {
@@ -2464,6 +2689,9 @@ jobs:
                           updateSettingsUi()
                           toast("Download folder changed")
                       }
+                  } else if (requestCode == REQ_GH_TREE) {
+                      val u = data?.data
+                      if (resultCode == RESULT_OK && u != null) confirmGithubFolderUpload(u)
                   } else {
                       super.onActivityResult(requestCode, resultCode, data)
                   }
@@ -2540,9 +2768,10 @@ jobs:
                   pm.menu.add(0, 1, 0, if (desktop) "Desktop mode: ON" else "Desktop mode: OFF")
                   pm.menu.add(0, 6, 1, if (orient == 1) "Landscape mode: ON" else "Landscape mode: OFF")
                   pm.menu.add(0, 2, 2, "Downloads")
-                  pm.menu.add(0, 3, 3, "Bookmarks")
-                  pm.menu.add(0, 4, 4, "Share link")
-                  pm.menu.add(0, 5, 5, "Settings")
+                  pm.menu.add(0, 7, 3, "Upload folder to GitHub")
+                  pm.menu.add(0, 3, 4, "Bookmarks")
+                  pm.menu.add(0, 4, 5, "Share link")
+                  pm.menu.add(0, 5, 6, "Settings")
                   pm.setOnMenuItemClickListener {
                       when (it.itemId) {
                           1 -> toggleDesktop()
@@ -2553,6 +2782,7 @@ jobs:
                               toast(if (orient == 1) "Landscape mode ON" else "Screen orientation: Auto")
                           }
                           2 -> showPage(dlPage)
+                          7 -> openGithubUploadDialog()
                           3 -> {
                               val list = prefs.getStringSet("bmk", emptySet())!!.toTypedArray()
                               dlg().setTitle("Bookmarks")
@@ -2670,7 +2900,6 @@ jobs:
                   }
               }
 
-              // 2 = already downloaded (file still exists), 1 = download in progress, 0 = free
               private fun qStatus(vid: String, key: String): Int {
                   for (d in items) {
                       if (d.kind == 0 && d.vid == vid && d.qkey == key) {
@@ -2696,7 +2925,6 @@ jobs:
                   longPressVideo(page, t.web.title ?: "Video")
               }
 
-              // Used when the exact list cannot be read: the downloader picks the best quality up to the chosen height.
               private fun standardQualities(): List<Q> {
                   val list = mutableListOf<Q>()
                   list.add(Q("Original quality (best)", "bv*+ba/b", false, 0L, "best", ""))
@@ -2728,7 +2956,6 @@ jobs:
                       .show()
               }
 
-              // Long-press on a YouTube video: read that video's own qualities and show only those.
               private fun longPressVideo(url: String, title: String = "Video") {
                   if (!ready) { toast("Downloader is starting, try again in a moment"); return }
                   val link = normalUrl(url)
@@ -3158,7 +3385,6 @@ jobs:
                   if (dlPage.visibility == View.VISIBLE) refreshDl()
               }
 
-              // Small download icon flies to the top-right download button.
               private fun flyToDownload() {
                   val root = findViewById<FrameLayout>(R.id.root)
                   val target = findViewById<View>(R.id.bDl)
@@ -3199,7 +3425,7 @@ jobs:
                       .start()
               }
 
-              // ---------- direct file downloads (links inside web pages) ----------
+              // ---------- direct file downloads ----------
 
               private fun startDirectNamed(
                   url: String,
