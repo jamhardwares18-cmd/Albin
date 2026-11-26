@@ -1335,6 +1335,31 @@ jobs:
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/ic_bg"/><foreground android:drawable="@drawable/ic_launcher_foreground"/></adaptive-icon>
           EOF_FILE
 
+      - name: Patch hidden file upload
+        run: |
+          python3 - <<'PY'
+          p='app/src/main/java/com/example/ytdl/MainActivity.kt'
+          s=open(p,encoding='utf-8').read()
+          a='if (mapped.size > 100) dlg().setTitle('
+          b='private fun readEntryBytes('
+          assert a in s and b in s
+          s=s.replace(a,'if (mapped.any { it.relPath.split("/").any { x -> x.startsWith(".") } }) uploadHiddenViaApi(mapped) else if (mapped.size > 100) dlg().setTitle(',1)
+          fn=r'''private fun uploadHiddenViaApi(mapped: List<UploadEntry>) {
+            val curUrl = tabs.getOrNull(cur)?.web?.url ?: ""
+            val repo = parseGithubUrl(curUrl).first; val branch = parseGithubUrl(curUrl).second
+            val segs = Uri.parse(curUrl).pathSegments ?: emptyList<String>()
+            val sub = if (segs.size > 4 && segs[2] == "upload") segs.drop(4).joinToString("/") else ""
+            val tok = prefs.getString("ghToken", "") ?: ""
+            if (repo.isEmpty()) { toast("Open the GitHub upload page first"); return }
+            if (tok.isEmpty()) { dlg().setTitle("Token needed").setMessage("Hidden files (.github, .gitignore) cannot be added on the GitHub web page. Enter your GitHub token once.").setPositiveButton("Enter token") { _, _ -> openGithubUploadDialog() }.setNegativeButton("Cancel", null).show(); return }
+            val files = if (sub.isEmpty()) mapped else mapped.map { UploadEntry("$sub/${it.relPath}", it.size, it.file, it.uri) }
+            dlg().setTitle("Upload via API").setMessage("${files.size} files (with hidden files) will be committed directly to $repo.").setPositiveButton("Upload") { _, _ -> runGithubUpload(files, repo, branch, "Upload folder", tok) }.setNegativeButton("Cancel", null).show()
+           }
+           '''
+          s=s.replace(b,fn+b,1)
+          open(p,'w',encoding='utf-8').write(s)
+          PY
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon -PvCode=$((100 + GITHUB_RUN_NUMBER))
 
