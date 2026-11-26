@@ -85,29 +85,11 @@ jobs:
           EOF_FILE
           mkdir -p app
           cat > app/build.gradle.kts <<'EOF_FILE'
-          plugins {
-            id("com.android.application")
-            id("org.jetbrains.kotlin.android")
-          }
+          plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
           android {
-            namespace = "com.example.ytdl"
-            compileSdk = 34
-            defaultConfig {
-              applicationId = "com.abh.browser"
-              minSdk = 29
-              targetSdk = 34
-              versionCode = (project.findProperty("vCode") as String?)?.toIntOrNull() ?: 1
-              versionName = "3.0"
-              ndk { abiFilters += listOf("arm64-v8a") }
-            }
-            signingConfigs {
-              create("abh") {
-                storeFile = rootProject.file("abh.keystore")
-                storePassword = "abhbrowser"
-                keyAlias = "abh"
-                keyPassword = "abhbrowser"
-              }
-            }
+            namespace = "com.example.ytdl"; compileSdk = 34
+            defaultConfig { applicationId = "com.abh.browser"; minSdk = 29; targetSdk = 34; versionCode = (project.findProperty("vCode") as String?)?.toIntOrNull() ?: 1; versionName = "3.0"; ndk { abiFilters += listOf("arm64-v8a") } }
+            signingConfigs { create("abh") { storeFile = rootProject.file("abh.keystore"); storePassword = "abhbrowser"; keyAlias = "abh"; keyPassword = "abhbrowser" } }
             buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("abh") } }
             compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
             kotlinOptions { jvmTarget = "17" }
@@ -138,13 +120,7 @@ jobs:
           mkdir -p app/src/main/res/values
           cat > app/src/main/res/values/styles.xml <<'EOF_FILE'
           <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-            <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
-              <item name="android:windowBackground">#121214</item>
-              <item name="android:statusBarColor">#121214</item>
-              <item name="android:navigationBarColor">#121214</item>
-            </style>
-          </resources>
+          <resources><style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar"><item name="android:windowBackground">#121214</item><item name="android:statusBarColor">#121214</item><item name="android:navigationBarColor">#121214</item></style></resources>
           EOF_FILE
           mkdir -p app/src/main/res/drawable
           cat > app/src/main/res/drawable/ic_back.xml <<'EOF_FILE'
@@ -369,15 +345,11 @@ jobs:
           val LIGHT = Pal(0xFFFFFFFF.toInt(), 0xFFECEDF1.toInt(), 0xFFF1F3F4.toInt(), 0xFF1B1B1F.toInt(), 0xFF5F6368.toInt(), 0xFF7A7A80.toInt())
           const val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
           const val MOBILE_UA = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-          const val REQ_PERM = 76
-          const val REQ_FILE = 77
-          const val REQ_TREE = 78
-          const val REQ_GH_TREE = 79
-          const val REQ_ALL_FILES = 80
-          const val REQ_WEB_TREE = 81
+          const val REQ_PERM = 76; const val REQ_FILE = 77; const val REQ_TREE = 78; const val REQ_GH_TREE = 79; const val REQ_ALL_FILES = 80; const val REQ_WEB_TREE = 81
 
           class HttpCodeException(val code: Int) : Exception("Server returned HTTP $code")
           class UploadEntry(val relPath: String, val size: Long, val file: File?, val uri: Uri?)
+          class PickItem(val name: String, val isDir: Boolean, val size: Long, val file: File?, val uri: Uri?, val isBack: Boolean = false, var checked: Boolean = false)
           class Tab(val web: WebView) { var home = true; var profile = ""; var thumb: Bitmap? = null }
 
           class DlItem(var title: String, @Volatile var state: Int, @Volatile var progress: Int, var uri: String?, var mime: String?, @Volatile var msg: String) {
@@ -402,9 +374,7 @@ jobs:
           val WV_FALLBACK_CODES = setOf(401, 403, 406, 409, 412, 429, 503)
 
           class MainActivity : Activity() {
-            private val tabs = mutableListOf<Tab>()
-            private val items = mutableListOf<DlItem>()
-            private var shownCache: List<DlItem> = emptyList()
+            private val tabs = mutableListOf<Tab>(); private val items = mutableListOf<DlItem>(); private var shownCache: List<DlItem> = emptyList()
             private var cur = 0; private var dlTab = 0; @Volatile private var qPid = ""; private var ready = false
             private var desktop = false; private var theme = 0; private var orient = 0; private var cookiesOn = false
             private var col = DARK; private var barsHidden = false; private var lastBarToggle = 0L
@@ -412,7 +382,7 @@ jobs:
             private val lastUiUpdate = AtomicLong(0L); private val savePending = AtomicBoolean(false)
             private val saveLock = Any(); private val wvDlLock = Any(); private val wvOnlyHosts = Collections.synchronizedSet(HashSet<String>())
             private var activeBatchCancel: AtomicBoolean? = null
-            private var folderPickMode = 0; private var ghRepo = ""; private var ghBranch = ""; private var ghSubpath = ""; private var ghMsg = "Upload folder"; private var ghToken = ""; private var ghKeepRoot = true
+            private var folderPickMode = 0; private var ghRepo = ""; private var ghBranch = ""; private var ghSubpath = ""; private var ghMsg = "Upload folder"; private var ghToken = ""; private var ghKeepRoot = false
             private var dlWv: WebView? = null; private var dlWvProfile = ""; private var dlWvHost = ""
             @Volatile private var wvD: DlItem? = null; @Volatile private var wvGen = 0; @Volatile private var wvToken = ""
             @Volatile private var wvFos: FileOutputStream? = null; private val wvFosLock = Any()
@@ -440,9 +410,7 @@ jobs:
               dlAdapter = DlAdapter(); dlList.adapter = dlAdapter; dlList.emptyView = findViewById(R.id.dlEmpty)
               dlList.setOnItemClickListener { _, _, p, _ -> val d = shownCache.getOrNull(p); if (d != null && d.state == 2) openFile(d) }
               tabsAdapter = TabsAdapter(); tabsGrid.adapter = tabsAdapter
-              val goAction = TextView.OnEditorActionListener { v, _, _ ->
-                open(v.text.toString()); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0); v.clearFocus(); true
-              }
+              val goAction = TextView.OnEditorActionListener { v, _, _ -> open(v.text.toString()); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0); v.clearFocus(); true }
               urlBox.setOnEditorActionListener(goAction); homeSearch.setOnEditorActionListener(goAction)
               click(R.id.qGoogle) { open("https://www.google.com") }; click(R.id.qYouTube) { open("https://m.youtube.com") }
               click(R.id.qWiki) { open("https://www.wikipedia.org") }; click(R.id.qGit) { open("https://github.com") }
@@ -458,16 +426,8 @@ jobs:
               click(R.id.bTabs) { showTabs() }; click(R.id.bMenu) { showMenu(it) }
               click(R.id.rowFolder) { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_TREE) }
               click(R.id.rowFolderReset) { prefs.edit().remove("folder").apply(); updateSettingsUi(); toast("Using default Downloads folder") }
-              click(R.id.rowTheme) {
-                dlg().setTitle("Theme").setSingleChoiceItems(arrayOf("Auto (follow system)", "Light (day)", "Dark (night)"), theme) { d, i ->
-                  theme = i; prefs.edit().putInt("theme", i).apply(); d.dismiss(); applyTheme()
-                }.show()
-              }
-              click(R.id.rowOrientation) {
-                dlg().setTitle("Screen orientation").setSingleChoiceItems(arrayOf("Auto (follow phone)", "Landscape", "Portrait"), orient) { d, i ->
-                  orient = i; prefs.edit().putInt("orient", i).apply(); d.dismiss(); applyOrientation()
-                }.show()
-              }
+              click(R.id.rowTheme) { dlg().setTitle("Theme").setSingleChoiceItems(arrayOf("Auto (follow system)", "Light (day)", "Dark (night)"), theme) { d, i -> theme = i; prefs.edit().putInt("theme", i).apply(); d.dismiss(); applyTheme() }.show() }
+              click(R.id.rowOrientation) { dlg().setTitle("Screen orientation").setSingleChoiceItems(arrayOf("Auto (follow phone)", "Landscape", "Portrait"), orient) { d, i -> orient = i; prefs.edit().putInt("orient", i).apply(); d.dismiss(); applyOrientation() }.show() }
               click(R.id.rowDesktop) { toggleDesktop() }
               click(R.id.rowCookies) { cookiesOn = !cookiesOn; prefs.edit().putBoolean("cookies", cookiesOn).apply(); updateSettingsUi() }
               click(R.id.rowUpdate) { toast("Updating downloader engine..."); Thread { updateEngine(true) }.start() }
@@ -496,64 +456,36 @@ jobs:
             private fun isAudioUrl(u: String) = urlExt(u) in AUDIO_EXTS
 
             private fun normUrl(u: String): String {
-              val uri = Uri.parse(u.substringBefore('#').trim())
-              val host = (uri.host ?: "").lowercase(Locale.US).removePrefix("www.")
-              val rawPath = Uri.decode(uri.path ?: "")
-              val path = when { rawPath.isEmpty() -> "/"; rawPath.length > 1 -> rawPath.trimEnd('/'); else -> rawPath }
-              val rawQ = uri.encodedQuery; val q = if (!rawQ.isNullOrEmpty()) Uri.decode(rawQ) else ""
-              return "$host$path" + (if (q.isNotEmpty()) "?$q" else "")
+              val uri = Uri.parse(u.substringBefore('#').trim()); val host = (uri.host ?: "").lowercase(Locale.US).removePrefix("www.")
+              val rawPath = Uri.decode(uri.path ?: ""); val path = when { rawPath.isEmpty() -> "/"; rawPath.length > 1 -> rawPath.trimEnd('/'); else -> rawPath }
+              val rawQ = uri.encodedQuery; val q = if (!rawQ.isNullOrEmpty()) Uri.decode(rawQ) else ""; return "$host$path" + (if (q.isNotEmpty()) "?$q" else "")
             }
 
-            private fun sameHost(a: String, b: String): Boolean {
-              val ha = (Uri.parse(a).host ?: "").lowercase(Locale.US).removePrefix("www.")
-              val hb = (Uri.parse(b).host ?: "").lowercase(Locale.US).removePrefix("www.")
-              return ha.isNotEmpty() && ha == hb
-            }
-
+            private fun sameHost(a: String, b: String): Boolean { val ha = (Uri.parse(a).host ?: "").lowercase(Locale.US).removePrefix("www."); val hb = (Uri.parse(b).host ?: "").lowercase(Locale.US).removePrefix("www."); return ha.isNotEmpty() && ha == hb }
             private fun guessNameFromUrl(u: String) = sanitizeName(Uri.decode((Uri.parse(u).lastPathSegment ?: "Folder").substringBeforeLast('.')).replace('_', ' ').replace('-', ' ')).ifEmpty { "Folder" }
-
-            private fun dirSignature(u: String): String {
-              val uri = Uri.parse(u)
-              val qDir = uri.getQueryParameter("dir") ?: uri.getQueryParameter("folder") ?: uri.getQueryParameter("path") ?: uri.getQueryParameter("album")
-              return if (!qDir.isNullOrEmpty()) Uri.decode(qDir).trim('/').lowercase(Locale.US) else Uri.decode(uri.path ?: "").trim('/').lowercase(Locale.US)
-            }
-
+            private fun dirSignature(u: String): String { val uri = Uri.parse(u); val q = uri.getQueryParameter("dir") ?: uri.getQueryParameter("folder") ?: uri.getQueryParameter("path") ?: uri.getQueryParameter("album"); return if (!q.isNullOrEmpty()) Uri.decode(q).trim('/').lowercase(Locale.US) else Uri.decode(uri.path ?: "").trim('/').lowercase(Locale.US) }
             private fun isChildPath(childUrl: String, baseUrl: String): Boolean { val c = dirSignature(childUrl); val b = dirSignature(baseUrl); return b.isNotEmpty() && c.length > b.length && c.startsWith("$b/") }
             private fun isParentUrl(candidateUrl: String, baseUrl: String): Boolean { val c = dirSignature(candidateUrl); val b = dirSignature(baseUrl); if (c.isEmpty() && b.isNotEmpty()) return true; return b.isNotEmpty() && c.length < b.length && b.startsWith("$c/") }
 
             private fun isLikelyChildFolder(a: Element, href: String, baseUrl: String): Boolean {
-              if (isChildPath(href, baseUrl)) return true
-              val box = a.closest("tr, li, div") ?: a
-              val imgs = if (box.select("a").size <= 2) box.select("img") else a.select("img")
-              for (img in imgs) { val h = (img.attr("src") + " " + img.attr("alt") + " " + img.attr("title")).lowercase(Locale.US); if (h.contains("folder") || h.contains("dir")) return true }
+              if (isChildPath(href, baseUrl)) return true; val box = a.closest("tr, li, div") ?: a
+              for (img in (if (box.select("a").size <= 2) box.select("img") else a.select("img"))) { val h = (img.attr("src") + " " + img.attr("alt") + " " + img.attr("title")).lowercase(Locale.US); if (h.contains("folder") || h.contains("dir")) return true }
               return false
             }
 
-            private fun applyOrientation() {
-              requestedOrientation = when (orient) { 1 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE; 2 -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT; else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
-              updateSettingsUi()
-            }
-
+            private fun applyOrientation() { requestedOrientation = when (orient) { 1 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE; 2 -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT; else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }; updateSettingsUi() }
             private fun setBarsHidden(hide: Boolean) {
               val wantHide = hide && resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && tabs.getOrNull(cur)?.home == false && dlPage.visibility != View.VISIBLE && setPage.visibility != View.VISIBLE && tabsPage.visibility != View.VISIBLE
-              if (barsHidden == wantHide) return; barsHidden = wantHide
-              val vis = if (wantHide) View.GONE else View.VISIBLE; topBar.visibility = vis; bottomBar.visibility = vis; lastBarToggle = System.currentTimeMillis()
+              if (barsHidden == wantHide) return; barsHidden = wantHide; val vis = if (wantHide) View.GONE else View.VISIBLE; topBar.visibility = vis; bottomBar.visibility = vis; lastBarToggle = System.currentTimeMillis()
             }
 
-            private fun applyTheme() {
-              col = if (dark) DARK else LIGHT; themeTree(findViewById(R.id.root)); window.statusBarColor = col.bg; window.navigationBarColor = col.bg; bars()
-              for (t in tabs) applyWeb(t.web); refreshDl(); if (tabsPage.visibility == View.VISIBLE) tabsAdapter.notifyDataSetChanged(); updateSettingsUi()
-            }
-
+            private fun applyTheme() { col = if (dark) DARK else LIGHT; themeTree(findViewById(R.id.root)); window.statusBarColor = col.bg; window.navigationBarColor = col.bg; bars(); for (t in tabs) applyWeb(t.web); refreshDl(); if (tabsPage.visibility == View.VISIBLE) tabsAdapter.notifyDataSetChanged(); updateSettingsUi() }
             private fun bars() { var f = View.SYSTEM_UI_FLAG_VISIBLE; if (!dark) f = f or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR; window.decorView.systemUiVisibility = f }
-
             private fun themeTree(v: View) {
               val tag = v.tag as? String
               when (tag) { "bg" -> v.setBackgroundColor(col.bg); "pill" -> v.background = shape(col.pill, 24); "card" -> v.background = shape(col.card, 24); "outline" -> v.background = shape(Color.TRANSPARENT, 28, col.stroke, dp(1)); "tab" -> v.background = shape(Color.TRANSPARENT, 6, col.text, dp(2)) }
-              if (v is EditText) { v.setTextColor(col.text); v.setHintTextColor(col.sec) }
-              else if (v is TextView && tag != "logo") v.setTextColor(when (tag) { "sec" -> col.sec; "accent" -> 0xFF2D7FF9.toInt(); else -> col.text })
-              if (v is ImageButton) v.setColorFilter(col.text)
-              if (v is ViewGroup) for (i in 0 until v.childCount) themeTree(v.getChildAt(i))
+              if (v is EditText) { v.setTextColor(col.text); v.setHintTextColor(col.sec) } else if (v is TextView && tag != "logo") v.setTextColor(when (tag) { "sec" -> col.sec; "accent" -> 0xFF2D7FF9.toInt(); else -> col.text })
+              if (v is ImageButton) v.setColorFilter(col.text); if (v is ViewGroup) for (i in 0 until v.childCount) themeTree(v.getChildAt(i))
             }
 
             private fun updateSettingsUi() {
@@ -566,16 +498,12 @@ jobs:
             }
 
             override fun onConfigurationChanged(newConfig: Configuration) {
-              super.onConfigurationChanged(newConfig); if (theme == 0) applyTheme()
-              if (newConfig.orientation != Configuration.ORIENTATION_LANDSCAPE) setBarsHidden(false)
+              super.onConfigurationChanged(newConfig); if (theme == 0) applyTheme(); if (newConfig.orientation != Configuration.ORIENTATION_LANDSCAPE) setBarsHidden(false)
               if (tabsPage.visibility == View.VISIBLE) { tabsGrid.numColumns = if (newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE) 3 else 2; tabsAdapter.notifyDataSetChanged() }
             }
 
             inner class JsBridge(private val profile: String) {
-              @JavascriptInterface fun onAudioLink(url: String, title: String) {
-                if (url.isBlank()) return
-                runOnUiThread { val t = tabs.find { it.profile == profile }; startDirectNamed(url, title, t?.web?.url ?: url, profile, "", true, t?.web?.settings?.userAgentString ?: currentWebUa()) }
-              }
+              @JavascriptInterface fun onAudioLink(url: String, title: String) { if (url.isBlank()) return; runOnUiThread { val t = tabs.find { it.profile == profile }; startDirectNamed(url, title, t?.web?.url ?: url, profile, "", true, t?.web?.settings?.userAgentString ?: currentWebUa()) } }
               @JavascriptInterface fun setPendingName(title: String) { val clean = sanitizeName(title); if (!isJunkTitle(clean)) { pendingClickName = clean; pendingClickTime = System.currentTimeMillis() } }
               @JavascriptInterface fun onPickGithubWebFolder() { runOnUiThread { startFolderPick(0) } }
             }
@@ -588,15 +516,14 @@ jobs:
                   var fa = document.querySelector('file-attachment') || document.querySelector('.js-upload-manifest-file-container');
                   if (fa && !document.getElementById('__abhGhFolderBtn')) {
                     var wrap = document.createElement('div'); wrap.id = '__abhGhFolderBtn'; wrap.style.cssText = 'margin:10px auto;text-align:center;';
-                    var btn = document.createElement('button'); btn.type = 'button'; btn.textContent = '\uD83D\uDCC1 Upload Folder (with subfolders)';
+                    var btn = document.createElement('button'); btn.type = 'button'; btn.textContent = '\uD83D\uDCC1 File Manager (Upload Folder / Files)';
                     btn.style.cssText = 'background:#238636;color:#fff;border:1px solid rgba(240,246,252,0.1);border-radius:6px;padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer;';
                     btn.onclick = function(e) { e.preventDefault(); e.stopPropagation(); ABH.onPickGithubWebFolder(); };
                     wrap.appendChild(btn); fa.parentNode.insertBefore(wrap, fa);
                   }
                 }
-                if (window.__abhHooked) return;
-                window.__abhHooked = true;
-                function isAudioHref(h) { if (!h) return false; return /\.(mp3|m4a|flac|wav|aac|ogg|opus)$/.test(h.split('#')[0].split('?')[0].toLowerCase()); }
+                if (window.__abhHooked) return; window.__abhHooked = true;
+                function isAudioHref(h) { return !!h && /\.(mp3|m4a|flac|wav|aac|ogg|opus)$/.test(h.split('#')[0].split('?')[0].toLowerCase()); }
                 function isDlHref(h) { if (!h) return false; var l = h.toLowerCase(); return isAudioHref(h) || l.indexOf('download') >= 0 || l.indexOf('dl=') >= 0 || l.indexOf('file=') >= 0 || l.indexOf('/dl/') >= 0; }
                 function isPlayElem(el) { if (!el) return false; var s = ((el.alt||'') + ' ' + (el.title||'') + ' ' + (el.className||'') + ' ' + (el.id||'') + ' ' + (el.src||'')).toLowerCase(); return s.indexOf('play') >= 0 && s.indexOf('down') < 0 && s.indexOf('dl') < 0; }
                 function isJunkTxt(s) { if (!s) return true; var l = s.trim().toLowerCase(); return l.length <= 2 || /^(play|dl|download|save|add|mp3|song|track|audio|listen)$/.test(l) || /^[0-9]+(\.[0-9]+)?\s*(mb|kb|gb|kbps)?$/.test(l); }
@@ -604,8 +531,7 @@ jobs:
                 function findSingleRow(el) { var cur = el ? el.parentElement : null, d = 0; while (cur && d < 6) { var tag = (cur.tagName || '').toUpperCase(); if (tag === 'TR' || tag === 'LI' || tag === 'DIV' || tag === 'P') return (cur.querySelectorAll('a').length <= 6 && cur.querySelectorAll('tr').length <= 1) ? cur : null; cur = cur.parentElement; d++; } return null; }
                 function inlineTitle(el) { if (!el) return ''; var best = '', stop = {BR:1,TR:1,LI:1,DIV:1,P:1,HR:1,TABLE:1}; function scan(f){ var n = f ? el.nextSibling : el.previousSibling, s = 0; while (n && s < 10) { if (n.nodeType === 1 && stop[n.tagName]) break; var t = (n.textContent || '').trim(); if (!isJunkTxt(t) && t.length > best.length) best = t; n = f ? n.nextSibling : n.previousSibling; s++; } } scan(true); if (!best) scan(false); return best; }
                 function rowTitle(row, skipA, refEl) {
-                  if (!row) return inlineTitle(refEl);
-                  var best = '', as = row.querySelectorAll('a');
+                  if (!row) return inlineTitle(refEl); var best = '', as = row.querySelectorAll('a');
                   for (var i = 0; i < as.length; i++) { if (as[i] === skipA) continue; var txt = (as[i].innerText || as[i].textContent || '').trim(); if (!isJunkTxt(txt) && txt.length > best.length) best = txt; }
                   if (best) return best;
                   var cells = row.querySelectorAll('td, th, span, font, b, strong, p, div');
@@ -615,30 +541,11 @@ jobs:
                   for (var k = 0; k < parts.length; k++) { var p = parts[k].trim(); if (!isJunkTxt(p) && p.length > best.length) best = p; }
                   return best;
                 }
-                function findRowDlLink(row, skipA) {
-                  if (!row) return null; var links = row.querySelectorAll('a[href]'); if (!links.length || links.length > 6) return null;
-                  for (var i = 0; i < links.length; i++) { var sib = links[i]; if (sib === skipA) continue; var img = sib.querySelector('img'); var h = img ? ((img.src||'') + ' ' + (img.alt||'') + ' ' + (img.title||'')).toLowerCase() : ''; if (sib.href && (isDlHref(sib.href) || h.indexOf('dl') >= 0 || h.indexOf('down') >= 0 || h.indexOf('save') >= 0)) return sib; }
-                  return null;
-                }
-                function findMp3InAttr(el) {
-                  if (!el) return ''; var attrs = ['data-src','data-url','data-file','data-mp3','data-audio','onclick'];
-                  for (var i = 0; i < attrs.length; i++) { var v = el.getAttribute(attrs[i]) || ''; var m = v.match(/https?:\/\/[^'"\s)]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"\s)]*)?/i); if (m) return m[0]; var m2 = v.match(/['"]([^'"]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"]*)?)['"]/i); if (m2) { try { return new URL(m2[1], location.href).href; } catch(e) {} } }
-                  return '';
-                }
+                function findRowDlLink(row, skipA) { if (!row) return null; var links = row.querySelectorAll('a[href]'); if (!links.length || links.length > 6) return null; for (var i = 0; i < links.length; i++) { var sib = links[i]; if (sib === skipA) continue; var img = sib.querySelector('img'); var h = img ? ((img.src||'') + ' ' + (img.alt||'') + ' ' + (img.title||'')).toLowerCase() : ''; if (sib.href && (isDlHref(sib.href) || h.indexOf('dl') >= 0 || h.indexOf('down') >= 0 || h.indexOf('save') >= 0)) return sib; } return null; }
+                function findMp3InAttr(el) { if (!el) return ''; var attrs = ['data-src','data-url','data-file','data-mp3','data-audio','onclick']; for (var i = 0; i < attrs.length; i++) { var v = el.getAttribute(attrs[i]) || ''; var m = v.match(/https?:\/\/[^'"\s)]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"\s)]*)?/i); if (m) return m[0]; var m2 = v.match(/['"]([^'"]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"]*)?)['"]/i); if (m2) { try { return new URL(m2[1], location.href).href; } catch(e) {} } } return ''; }
                 function findUrlInEl(el) { if (!el) return ''; var a = el.closest ? el.closest('a[href]') : null; if (a && a.href && a.href.indexOf('http') === 0) return a.href; var oc = el.getAttribute ? (el.getAttribute('onclick') || '') : ''; if (!oc && el.parentElement) oc = el.parentElement.getAttribute('onclick') || ''; var m = oc.match(/['"]((?:https?:\/\/|\/|\?)[^'"]+)['"]/); if (m) { try { return new URL(m[1], location.href).href; } catch(e) {} } return ''; }
-                function findAudioOnPageByTitle(title) {
-                  var key = normKey(title); if (!key || key.length < 3) return ''; var as = document.querySelectorAll('a[href]');
-                  for (var i = 0; i < as.length; i++) { var h = as[i].href; if (!isAudioHref(h)) continue; var fk = normKey(decodeURIComponent(h.split('#')[0].split('?')[0].split('/').pop() || '')); if (fk && (fk === key || fk.indexOf(key) >= 0 || key.indexOf(fk) >= 0)) return h; }
-                  var re = /['"]([^'"\s<>]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"\s<>]*)?)['"]/ig, scripts = document.scripts;
-                  for (var s = 0; s < scripts.length; s++) { var txt = scripts[s].textContent || ''; if (txt.length > 300000) continue; re.lastIndex = 0; var m; while ((m = re.exec(txt)) !== null) { var raw = m[1], fk2 = normKey(decodeURIComponent(raw.split('#')[0].split('?')[0].split('/').pop() || '')); if (fk2 && (fk2 === key || fk2.indexOf(key) >= 0 || key.indexOf(fk2) >= 0)) { try { return new URL(raw, location.href).href; } catch(e) {} } } }
-                  return '';
-                }
-                document.addEventListener('touchstart', function(e) {
-                  var t = e.target, a = t && t.closest ? t.closest('a') : null, row = findSingleRow(a || t);
-                  var u = (a && a.href && a.href.indexOf('http') === 0) ? a.href : findUrlInEl(t);
-                  var txt = a ? (a.innerText || a.textContent || a.title || '').trim() : ''; if (isJunkTxt(txt)) txt = rowTitle(row, a, a || t);
-                  window.__abhLastUrl = u || ''; window.__abhLastText = txt || '';
-                }, true);
+                function findAudioOnPageByTitle(title) { var key = normKey(title); if (!key || key.length < 3) return ''; var as = document.querySelectorAll('a[href]'); for (var i = 0; i < as.length; i++) { var h = as[i].href; if (!isAudioHref(h)) continue; var fk = normKey(decodeURIComponent(h.split('#')[0].split('?')[0].split('/').pop() || '')); if (fk && (fk === key || fk.indexOf(key) >= 0 || key.indexOf(fk) >= 0)) return h; } var re = /['"]([^'"\s<>]+\.(?:mp3|m4a|flac|wav|aac|ogg|opus)(?:\?[^'"\s<>]*)?)['"]/ig, scripts = document.scripts; for (var s = 0; s < scripts.length; s++) { var txt = scripts[s].textContent || ''; if (txt.length > 300000) continue; re.lastIndex = 0; var m; while ((m = re.exec(txt)) !== null) { var raw = m[1], fk2 = normKey(decodeURIComponent(raw.split('#')[0].split('?')[0].split('/').pop() || '')); if (fk2 && (fk2 === key || fk2.indexOf(key) >= 0 || key.indexOf(fk2) >= 0)) { try { return new URL(raw, location.href).href; } catch(e) {} } } } return ''; }
+                document.addEventListener('touchstart', function(e) { var t = e.target, a = t && t.closest ? t.closest('a') : null, row = findSingleRow(a || t); var u = (a && a.href && a.href.indexOf('http') === 0) ? a.href : findUrlInEl(t); var txt = a ? (a.innerText || a.textContent || a.title || '').trim() : ''; if (isJunkTxt(txt)) txt = rowTitle(row, a, a || t); window.__abhLastUrl = u || ''; window.__abhLastText = txt || ''; }, true);
                 document.addEventListener('click', function(e) {
                   var t = e.target; if (!t || !t.closest) return; var a = t.closest('a'), row = findSingleRow(a || t), dlSib = row ? findRowDlLink(row, a) : null;
                   if (dlSib && (isPlayElem(t) || (a && isPlayElem(a)))) return;
@@ -654,10 +561,7 @@ jobs:
                     var mp3 = findMp3InAttr(t) || (row ? findMp3InAttr(row) : '');
                     if (mp3) { e.preventDefault(); e.stopPropagation(); var n2 = (t.innerText || t.textContent || '').trim(); ABH.onAudioLink(mp3, !isJunkTxt(n2) ? n2 : rowTitle(row, null, t)); return; }
                     var ct = (t.innerText || t.textContent || '').trim();
-                    if (!isJunkTxt(ct)) {
-                      if (dlSib && (row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSib.href))) { e.preventDefault(); e.stopPropagation(); ABH.onAudioLink(dlSib.href, rowTitle(row, null, t) || ct); return; }
-                      var m2 = findAudioOnPageByTitle(ct); if (m2) { e.preventDefault(); e.stopPropagation(); ABH.onAudioLink(m2, ct); }
-                    }
+                    if (!isJunkTxt(ct)) { if (dlSib && (row.querySelector('img[src*="play" i], img[alt*="play" i]') || isAudioHref(dlSib.href))) { e.preventDefault(); e.stopPropagation(); ABH.onAudioLink(dlSib.href, rowTitle(row, null, t) || ct); return; } var m2 = findAudioOnPageByTitle(ct); if (m2) { e.preventDefault(); e.stopPropagation(); ABH.onAudioLink(m2, ct); } }
                   }
                 }, true);
               })();
@@ -665,17 +569,8 @@ jobs:
               w.evaluateJavascript(js, null)
             }
 
-            private fun applyWeb(w: WebView) {
-              val s = w.settings; s.javaScriptEnabled = true; s.domStorageEnabled = true; s.mediaPlaybackRequiresUserGesture = false
-              s.userAgentString = if (desktop) DESKTOP_UA else null; s.useWideViewPort = desktop; s.loadWithOverviewMode = desktop
-              s.setSupportZoom(true); s.builtInZoomControls = true; s.displayZoomControls = false; s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-              if (Build.VERSION.SDK_INT >= 33) s.isAlgorithmicDarkeningAllowed = dark else s.forceDark = if (dark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF
-            }
-
-            private fun toggleDesktop() {
-              desktop = !desktop; prefs.edit().putBoolean("desktop", desktop).apply(); for (t in tabs) applyWeb(t.web)
-              if (!tabs[cur].home) tabs[cur].web.reload(); updateSettingsUi(); toast(if (desktop) "Desktop mode ON" else "Desktop mode OFF")
-            }
+            private fun applyWeb(w: WebView) { val s = w.settings; s.javaScriptEnabled = true; s.domStorageEnabled = true; s.mediaPlaybackRequiresUserGesture = false; s.userAgentString = if (desktop) DESKTOP_UA else null; s.useWideViewPort = desktop; s.loadWithOverviewMode = desktop; s.setSupportZoom(true); s.builtInZoomControls = true; s.displayZoomControls = false; s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE; if (Build.VERSION.SDK_INT >= 33) s.isAlgorithmicDarkeningAllowed = dark else s.forceDark = if (dark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF }
+            private fun toggleDesktop() { desktop = !desktop; prefs.edit().putBoolean("desktop", desktop).apply(); for (t in tabs) applyWeb(t.web); if (!tabs[cur].home) tabs[cur].web.reload(); updateSettingsUi(); toast(if (desktop) "Desktop mode ON" else "Desktop mode OFF") }
 
             @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
             private fun newTab(profile: String? = null) {
@@ -698,8 +593,7 @@ jobs:
               w.setOnLongClickListener {
                 val r = w.hitTestResult; val ex = r.extra; var vid = ""; val t = r.type
                 if (ex != null && ex.startsWith("http") && (t == WebView.HitTestResult.SRC_ANCHOR_TYPE || t == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE || t == WebView.HitTestResult.IMAGE_TYPE)) {
-                  if (isYt(ex)) vid = ytId(ex)
-                  if (vid.isEmpty()) vid = Regex("/(?:vi|vi_webp|an_webp)/([A-Za-z0-9_-]{11})/").find(ex)?.groupValues?.get(1) ?: ""
+                  if (isYt(ex)) vid = ytId(ex); if (vid.isEmpty()) vid = Regex("/(?:vi|vi_webp|an_webp)/([A-Za-z0-9_-]{11})/").find(ex)?.groupValues?.get(1) ?: ""
                 }
                 if (vid.isNotEmpty()) { longPressVideo("https://www.youtube.com/watch?v=" + vid); true }
                 else {
@@ -707,16 +601,8 @@ jobs:
                   val pageUrl = w.url ?: ""; val webUa = w.settings.userAgentString ?: MOBILE_UA; val hitUrl = if (ex != null && (ex.startsWith("http://") || ex.startsWith("https://"))) ex else ""
                   w.evaluateJavascript(infoJs) { raw ->
                     var linkText = ""; var jsUrl = ""; val pageLinks = HashSet<String>()
-                    try {
-                      val jsStr = JSONTokener(raw).nextValue() as? String
-                      if (!jsStr.isNullOrEmpty()) {
-                        val o = JSONObject(jsStr); jsUrl = o.optString("u", "")
-                        if (hitUrl.isEmpty() || jsUrl.isEmpty() || normUrl(jsUrl) == normUrl(hitUrl)) linkText = o.optString("t", "")
-                        val arr = o.optJSONArray("links"); if (arr != null) for (i in 0 until arr.length()) pageLinks.add(normUrl(arr.getString(i)))
-                      }
-                    } catch (e: Exception) { }
-                    val targetUrl = hitUrl.ifEmpty { if (jsUrl.startsWith("http")) jsUrl else "" }
-                    if (targetUrl.isNotEmpty()) handleLongPressLink(targetUrl, linkText, pageUrl, pageLinks, pf, webUa)
+                    try { val jsStr = JSONTokener(raw).nextValue() as? String; if (!jsStr.isNullOrEmpty()) { val o = JSONObject(jsStr); jsUrl = o.optString("u", ""); if (hitUrl.isEmpty() || jsUrl.isEmpty() || normUrl(jsUrl) == normUrl(hitUrl)) linkText = o.optString("t", ""); val arr = o.optJSONArray("links"); if (arr != null) for (i in 0 until arr.length()) pageLinks.add(normUrl(arr.getString(i))) } } catch (e: Exception) { }
+                    val targetUrl = hitUrl.ifEmpty { if (jsUrl.startsWith("http")) jsUrl else "" }; if (targetUrl.isNotEmpty()) handleLongPressLink(targetUrl, linkText, pageUrl, pageLinks, pf, webUa)
                   }
                   hitUrl.isNotEmpty()
                 }
@@ -725,10 +611,7 @@ jobs:
               w.webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                   val u = request?.url?.toString() ?: return false
-                  if (isAudioUrl(u)) {
-                    val titleHint = if (System.currentTimeMillis() - pendingClickTime < 5000) pendingClickName else ""
-                    startDirectNamed(u, titleHint, view?.url ?: u, pf, "", true, view?.settings?.userAgentString ?: currentWebUa()); return true
-                  }
+                  if (isAudioUrl(u)) { val titleHint = if (System.currentTimeMillis() - pendingClickTime < 5000) pendingClickName else ""; startDirectNamed(u, titleHint, view?.url ?: u, pf, "", true, view?.settings?.userAgentString ?: currentWebUa()); return true }
                   return false
                 }
                 override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) { if (view != null && tabs.getOrNull(cur)?.web == view && url != null) urlBox.setText(url); forceDesktopViewport(view); injectSiteHelper(view) }
@@ -736,18 +619,14 @@ jobs:
                 override fun onPageFinished(view: WebView?, url: String?) { forceDesktopViewport(view); injectSiteHelper(view) }
               }
               w.webChromeClient = object : WebChromeClient() {
-                override fun onShowCustomView(view: View?, callback: WebChromeClient.CustomViewCallback?) {
-                  if (view == null) return; customView = view; customCb = callback
-                  (window.decorView as FrameLayout).addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-                  window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                }
+                override fun onShowCustomView(view: View?, callback: WebChromeClient.CustomViewCallback?) { if (view == null) return; customView = view; customCb = callback; (window.decorView as FrameLayout).addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)); window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY }
                 override fun onHideCustomView() { hideCustom() }
                 override fun onProgressChanged(view: WebView?, newProgress: Int) { if (view != null && tabs.getOrNull(cur)?.web == view) { pageBar.progress = newProgress; pageBar.visibility = if (newProgress < 100) View.VISIBLE else View.GONE } }
                 override fun onShowFileChooser(webView: WebView?, filePathCallback: ValueCallback<Array<Uri>>?, fileChooserParams: WebChromeClient.FileChooserParams?): Boolean {
                   val curU = webView?.url ?: ""
                   if (parseGithubUrl(curU).first.isNotEmpty() && curU.contains("/upload")) {
                     fileCb?.onReceiveValue(null); fileCb = filePathCallback
-                    dlg().setTitle("GitHub Upload").setItems(arrayOf("Choose Files", "Choose Folder (with subfolders)")) { _, i ->
+                    dlg().setTitle("GitHub Upload").setItems(arrayOf("Choose Files", "Open File Manager (Mark Folders / Files)")) { _, i ->
                       if (i == 0) { try { startActivityForResult(fileChooserParams!!.createIntent(), REQ_FILE) } catch (e: Exception) { fileCb?.onReceiveValue(null); fileCb = null } }
                       else { fileCb?.onReceiveValue(null); fileCb = null; startFolderPick(0) }
                     }.setOnCancelListener { fileCb?.onReceiveValue(null); fileCb = null }.show()
@@ -760,11 +639,7 @@ jobs:
               val tab = Tab(w); tab.profile = pf; tabs.add(tab)
             }
 
-            private fun forceDesktopViewport(w: WebView?) {
-              if (!desktop || w == null) return
-              w.evaluateJavascript("(function(){function fix(){var ms=document.querySelectorAll('meta[name=viewport]');var m=ms[0];if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');(document.head||document.documentElement).appendChild(m);}for(var i=1;i<ms.length;i++){ms[i].parentNode.removeChild(ms[i]);}if(m.getAttribute('content')!=='width=1024')m.setAttribute('content','width=1024');}fix();if(!window.__abhDesk){window.__abhDesk=1;new MutationObserver(fix).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['content','name']});}})();", null)
-            }
-
+            private fun forceDesktopViewport(w: WebView?) { if (!desktop || w == null) return; w.evaluateJavascript("(function(){function fix(){var ms=document.querySelectorAll('meta[name=viewport]');var m=ms[0];if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');(document.head||document.documentElement).appendChild(m);}for(var i=1;i<ms.length;i++){ms[i].parentNode.removeChild(ms[i]);}if(m.getAttribute('content')!=='width=1024')m.setAttribute('content','width=1024');}fix();if(!window.__abhDesk){window.__abhDesk=1;new MutationObserver(fix).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['content','name']});}})();", null) }
             private fun hideCustom() { val v = customView ?: return; (window.decorView as FrameLayout).removeView(v); customCb?.onCustomViewHidden(); customView = null; customCb = null; bars() }
 
             private fun captureThumb(t: Tab) {
@@ -772,35 +647,15 @@ jobs:
               try { val targetW = 360; val scale = targetW.toFloat() / v.width.toFloat(); val bmp = Bitmap.createBitmap(targetW, (v.height * scale).toInt().coerceIn(120, 640), Bitmap.Config.RGB_565); val c = Canvas(bmp); c.scale(scale, scale); v.draw(c); t.thumb = bmp } catch (e: Exception) { }
             }
 
-            private fun showTab(i: Int) {
-              if (cur != i && cur in tabs.indices) captureThumb(tabs[cur]); cur = i
-              for (j in content.childCount - 1 downTo 0) if (content.getChildAt(j) is WebView) content.removeViewAt(j)
-              content.addView(tabs[i].web, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)); refresh()
-            }
-
-            private fun refresh() {
-              val t = tabs[cur]; home.visibility = if (t.home) View.VISIBLE else View.GONE; urlBox.setText(if (t.home) "" else (t.web.url ?: "")); tabCount.text = tabs.size.toString()
-              val pr = t.web.progress; pageBar.progress = pr; pageBar.visibility = if (!t.home && pr in 1..99) View.VISIBLE else View.GONE; setBarsHidden(false); updateFab()
-            }
-
-            private fun open(raw: String) {
-              val s = raw.trim(); if (s.isEmpty()) return
-              val url = when { s.startsWith("http://") || s.startsWith("https://") -> s; !s.contains(" ") && s.contains(".") -> "https://$s"; else -> "https://www.google.com/search?q=" + Uri.encode(s) }
-              val t = tabs[cur]; t.home = false; t.web.loadUrl(url); refresh(); urlBox.setText(url)
-            }
-
-            private fun showTabs() {
-              if (tabs.getOrNull(cur) != null) captureThumb(tabs[cur])
-              tabsGrid.numColumns = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) 3 else 2
-              findViewById<TextView>(R.id.tabsTitle).text = "Tabs (${tabs.size})"; tabsAdapter.notifyDataSetChanged(); showPage(tabsPage)
-            }
+            private fun showTab(i: Int) { if (cur != i && cur in tabs.indices) captureThumb(tabs[cur]); cur = i; for (j in content.childCount - 1 downTo 0) if (content.getChildAt(j) is WebView) content.removeViewAt(j); content.addView(tabs[i].web, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)); refresh() }
+            private fun refresh() { val t = tabs[cur]; home.visibility = if (t.home) View.VISIBLE else View.GONE; urlBox.setText(if (t.home) "" else (t.web.url ?: "")); tabCount.text = tabs.size.toString(); val pr = t.web.progress; pageBar.progress = pr; pageBar.visibility = if (!t.home && pr in 1..99) View.VISIBLE else View.GONE; setBarsHidden(false); updateFab() }
+            private fun open(raw: String) { val s = raw.trim(); if (s.isEmpty()) return; val url = when { s.startsWith("http://") || s.startsWith("https://") -> s; !s.contains(" ") && s.contains(".") -> "https://$s"; else -> "https://www.google.com/search?q=" + Uri.encode(s) }; val t = tabs[cur]; t.home = false; t.web.loadUrl(url); refresh(); urlBox.setText(url) }
+            private fun showTabs() { if (tabs.getOrNull(cur) != null) captureThumb(tabs[cur]); tabsGrid.numColumns = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) 3 else 2; findViewById<TextView>(R.id.tabsTitle).text = "Tabs (${tabs.size})"; tabsAdapter.notifyDataSetChanged(); showPage(tabsPage) }
 
             private fun closeTab(pos: Int) {
               if (pos !in tabs.indices) return
-              if (tabs.size > 1) {
-                val removed = tabs.removeAt(pos); content.removeView(removed.web); removed.web.destroy(); deleteProfileLater(removed.profile)
-                val next = when { cur == pos -> minOf(pos, tabs.size - 1); cur > pos -> cur - 1; else -> cur }; if (cur == pos) cur = -1; showTab(next)
-              } else { tabs[0].home = true; tabs[0].thumb = null; refresh(); hidePages(); return }
+              if (tabs.size > 1) { val removed = tabs.removeAt(pos); content.removeView(removed.web); removed.web.destroy(); deleteProfileLater(removed.profile); val next = when { cur == pos -> minOf(pos, tabs.size - 1); cur > pos -> cur - 1; else -> cur }; if (cur == pos) cur = -1; showTab(next) }
+              else { tabs[0].home = true; tabs[0].thumb = null; refresh(); hidePages(); return }
               findViewById<TextView>(R.id.tabsTitle).text = "Tabs (${tabs.size})"; tabsAdapter.notifyDataSetChanged()
             }
 
@@ -831,10 +686,7 @@ jobs:
                   val (finalUrl, doc) = fetchHtml(url, webUa, profile, sourceUrl, cancelled); if (cancelled.get()) return@Thread
                   val tmpl = HashSet<String>(); val needRootFetch = sourceLinks.isEmpty() || (sourceUrl.isNotEmpty() && normUrl(finalUrl) == normUrl(sourceUrl))
                   if (sourceUrl.isNotEmpty() && normUrl(finalUrl) != normUrl(sourceUrl)) tmpl.addAll(sourceLinks)
-                  if (needRootFetch) {
-                    val parsed = Uri.parse(finalUrl); val rootUrl = "${parsed.scheme ?: "https"}://${parsed.host ?: ""}/"
-                    if (normUrl(rootUrl) != normUrl(finalUrl)) try { val (_, rootDoc) = fetchHtml(rootUrl, webUa, profile, finalUrl, cancelled); for (a in rootDoc.select("a[href]")) { val h = a.absUrl("href"); if (h.startsWith("http")) tmpl.add(normUrl(h)) } } catch (e: Exception) { }
-                  }
+                  if (needRootFetch) { val parsed = Uri.parse(finalUrl); val rootUrl = "${parsed.scheme ?: "https"}://${parsed.host ?: ""}/"; if (normUrl(rootUrl) != normUrl(finalUrl)) try { val (_, rootDoc) = fetchHtml(rootUrl, webUa, profile, finalUrl, cancelled); for (a in rootDoc.select("a[href]")) { val h = a.absUrl("href"); if (h.startsWith("http")) tmpl.add(normUrl(h)) } } catch (e: Exception) { } }
                   if (cancelled.get()) return@Thread
                   val ignore = HashSet<String>(tmpl); if (sourceUrl.isNotEmpty()) ignore.add(normUrl(sourceUrl)); ignore.add(normUrl(finalUrl))
                   val res = analyzePage(doc, finalUrl, ignore)
@@ -914,24 +766,14 @@ jobs:
               return resUrl to Jsoup.parse(resHtml, resUrl)
             }
 
-            private fun findSingleSongRow(el: Element?): Element? {
-              var cur = el?.parent(); var depth = 0
-              while (cur != null && depth < 6) {
-                val tag = cur.tagName().lowercase(Locale.US)
-                if (tag == "tr" || tag == "li" || tag == "div" || tag == "p") return if (cur.select("a").size <= 6 && cur.select("tr").size <= 1) cur else null
-                cur = cur.parent(); depth++
-              }
-              return null
-            }
+            private fun findSingleSongRow(el: Element?): Element? { var cur = el?.parent(); var depth = 0; while (cur != null && depth < 6) { val tag = cur.tagName().lowercase(Locale.US); if (tag == "tr" || tag == "li" || tag == "div" || tag == "p") return if (cur.select("a").size <= 6 && cur.select("tr").size <= 1) cur else null; cur = cur.parent(); depth++ }; return null }
 
             private fun extractInlineTitle(el: Element?): String {
               if (el == null) return ""; val stopTags = setOf("br", "tr", "li", "div", "p", "hr", "table")
               fun scanFrom(anchor: Element): String {
                 var best = ""; fun checkNode(n: Node) { val raw = when (n) { is TextNode -> n.text(); is Element -> n.text(); else -> "" }; val t = sanitizeName(raw); if (!isJunkTitle(t) && t.length > best.length) best = t }
                 var cur: Node? = anchor.nextSibling(); var steps = 0; while (cur != null && steps < 10) { if (cur is Element && cur.tagName().lowercase(Locale.US) in stopTags) break; checkNode(cur); cur = cur.nextSibling(); steps++ }
-                if (best.isNotEmpty()) return best; cur = anchor.previousSibling(); steps = 0
-                while (cur != null && steps < 10) { if (cur is Element && cur.tagName().lowercase(Locale.US) in stopTags) break; checkNode(cur); cur = cur.previousSibling(); steps++ }
-                return best
+                if (best.isNotEmpty()) return best; cur = anchor.previousSibling(); steps = 0; while (cur != null && steps < 10) { if (cur is Element && cur.tagName().lowercase(Locale.US) in stopTags) break; checkNode(cur); cur = cur.previousSibling(); steps++ }; return best
               }
               val direct = scanFrom(el); if (direct.isNotEmpty()) return direct; val p = el.parent()
               return if (p != null && p.tagName().lowercase(Locale.US) == "span" && p.select("a").size <= 2) scanFrom(p) else ""
@@ -1033,26 +875,18 @@ jobs:
               for (d in toRun) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; directExec.execute { runDirect(d, g) } }
             }
 
-            // ---------- In-app folder picker + GitHub Web & API upload ----------
+            // ---------- Built-in File Manager + GitHub Web & API upload ----------
 
-            private fun hasStorageAccess(): Boolean =
-              if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
-              else checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-
-            private fun launchSystemFolderPicker() {
-              try { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), if (folderPickMode == 0) REQ_WEB_TREE else REQ_GH_TREE) }
-              catch (e: Exception) { toast("Could not open folder picker") }
-            }
+            private fun hasStorageAccess(): Boolean = if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager() else checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            private fun launchSystemFolderPicker() { try { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), if (folderPickMode == 0) REQ_WEB_TREE else REQ_GH_TREE) } catch (e: Exception) { toast("Could not open folder picker") } }
 
             private fun startFolderPick(mode: Int) {
               folderPickMode = mode
               if (hasStorageAccess()) { showInAppFolderPicker(Environment.getExternalStorageDirectory()); return }
-              dlg().setTitle("Folder access needed").setMessage("Allow file access once so you can pick any folder & subfolder easily (including Downloads).")
+              dlg().setTitle("File Manager access").setMessage("Allow file access once so the built-in File Manager can show all folders, hidden folders (.github) & hidden files (.gitignore).")
                 .setPositiveButton("Allow access") { _, _ ->
-                  if (Build.VERSION.SDK_INT >= 30) {
-                    try { startActivityForResult(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")), REQ_ALL_FILES) }
-                    catch (e: Exception) { startActivityForResult(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION), REQ_ALL_FILES) }
-                  } else requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), REQ_PERM)
+                  if (Build.VERSION.SDK_INT >= 30) { try { startActivityForResult(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")), REQ_ALL_FILES) } catch (e: Exception) { startActivityForResult(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION), REQ_ALL_FILES) } }
+                  else requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), REQ_PERM)
                 }.setNeutralButton("System picker") { _, _ -> launchSystemFolderPicker() }.setNegativeButton("Cancel", null).show()
             }
 
@@ -1063,74 +897,124 @@ jobs:
 
             private fun showInAppFolderPicker(startDir: File) {
               var curDir = startDir; val rootDir = Environment.getExternalStorageDirectory()
-              val titleTv = TextView(this).apply { textSize = 13f; setTextColor(col.sec); setPadding(dp(18), dp(12), dp(18), dp(8)) }
-              val lv = ListView(this); val rows = mutableListOf<Pair<String, File?>>()
+              val pathTv = TextView(this).apply { textSize = 12f; setTextColor(col.sec); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
+              val selAllBtn = TextView(this).apply { text = "Select all"; textSize = 13f; setTextColor(0xFF2D7FF9.toInt()); setPadding(dp(10), dp(4), dp(4), dp(4)) }
+              val hdr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(6), dp(14), dp(4)); addView(pathTv); addView(selAllBtn) }
+              val quickBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(12), dp(2), dp(12), dp(4)) }
+              val lv = ListView(this); val rows = mutableListOf<PickItem>()
+              val cbKeep = if (folderPickMode == 0) CheckBox(this).apply { setTextColor(col.text); setPadding(dp(10), dp(4), dp(10), dp(4)) } else null
+              var alertRef: AlertDialog? = null
+              fun updateBtns() {
+                val cnt = rows.count { !it.isBack && it.checked }
+                alertRef?.getButton(AlertDialog.BUTTON_POSITIVE)?.text = if (cnt > 0) "Upload ($cnt)" else "Upload folder"
+                val avail = rows.filter { !it.isBack }; selAllBtn.text = if (avail.isNotEmpty() && avail.all { it.checked }) "Clear" else "Select all"
+              }
+              lateinit var loadDir: (File) -> Unit
+              fun chip(label: String, dir: File) {
+                quickBar.addView(TextView(this).apply {
+                  text = label; textSize = 12f; setTextColor(col.text); background = shape(col.card, 12); setPadding(dp(10), dp(5), dp(10), dp(5))
+                  layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) }
+                  setOnClickListener { if (dir.exists()) loadDir(dir) }
+                })
+              }
+              chip("Storage", rootDir); chip("Download", File(rootDir, "Download")); chip("Documents", File(rootDir, "Documents"))
               val adapter = object : BaseAdapter() {
                 override fun getCount() = rows.size; override fun getItem(p: Int) = rows[p]; override fun getItemId(p: Int) = p.toLong()
-                override fun getView(p: Int, cv: View?, parent: ViewGroup?) = ((cv as? TextView) ?: TextView(this@MainActivity).apply { textSize = 15f; setPadding(dp(18), dp(13), dp(18), dp(13)) }).apply { setTextColor(col.text); text = rows[p].first }
+                override fun getView(p: Int, cv: View?, parent: ViewGroup?): View {
+                  val it = rows[p]
+                  val row = (cv as? LinearLayout) ?: LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(2), dp(12), dp(2))
+                    addView(CheckBox(this@MainActivity).apply { isFocusable = false })
+                    addView(TextView(this@MainActivity).apply { textSize = 14f; setPadding(dp(4), dp(9), dp(4), dp(9)); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
+                  }
+                  val cb = row.getChildAt(0) as CheckBox; val tv = row.getChildAt(1) as TextView; tv.setTextColor(col.text)
+                  if (it.isBack) { cb.visibility = View.GONE; tv.text = "..  (Back)"; row.setOnClickListener { it.file?.let { d -> loadDir(d) } } }
+                  else {
+                    cb.visibility = View.VISIBLE; cb.setOnCheckedChangeListener(null); cb.isChecked = it.checked
+                    cb.setOnCheckedChangeListener { _, chk -> it.checked = chk; updateBtns() }
+                    tv.text = if (it.isDir) "\uD83D\uDCC1  ${it.name}/" else "\uD83D\uDCC4  ${it.name}  (${fmtSize(it.size)})"
+                    row.setOnClickListener { if (it.isDir && it.file != null) loadDir(it.file) else { it.checked = !it.checked; cb.isChecked = it.checked; updateBtns() } }
+                  }
+                  return row
+                }
               }
               lv.adapter = adapter
-              fun loadDir(d: File) {
-                curDir = d; titleTv.text = d.absolutePath.removePrefix(rootDir.absolutePath).ifEmpty { "/Internal Storage" }; rows.clear()
-                if (d.absolutePath != rootDir.absolutePath && d.parentFile != null) rows.add("..  (Back)" to d.parentFile)
-                for (s in (d.listFiles() ?: emptyArray()).filter { it.isDirectory && !it.name.startsWith(".") }.sortedBy { it.name.lowercase(Locale.US) }) rows.add("\uD83D\uDCC1  ${s.name}  (${s.listFiles()?.size ?: 0})" to s)
-                if (rows.isEmpty()) rows.add("(No subfolders - tap Select this folder)" to null)
-                adapter.notifyDataSetChanged()
+              loadDir = { d ->
+                curDir = d; pathTv.text = d.absolutePath.removePrefix(rootDir.absolutePath).ifEmpty { "/" }
+                cbKeep?.text = "Put inside '${d.name}/'"; cbKeep?.isChecked = false; rows.clear()
+                if (d.absolutePath != rootDir.absolutePath && d.parentFile != null) rows.add(PickItem("..", true, 0L, d.parentFile, null, isBack = true))
+                for (f in (d.listFiles() ?: emptyArray()).filter { it.name != ".git" }.sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase(Locale.US) })) rows.add(PickItem(f.name, f.isDirectory, if (f.isFile) f.length() else 0L, f, null))
+                adapter.notifyDataSetChanged(); updateBtns()
               }
-              val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(titleTv); addView(lv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340))) }
+              selAllBtn.setOnClickListener { val avail = rows.filter { !it.isBack }; val next = !avail.all { it.checked }; for (r in avail) r.checked = next; adapter.notifyDataSetChanged(); updateBtns() }
+              val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(quickBar); addView(hdr); addView(lv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(310))); if (cbKeep != null) addView(cbKeep) }
               loadDir(startDir)
-              dlg().setTitle("Select folder to upload").setView(wrap)
-                .setPositiveButton("Select this folder") { _, _ -> scanAndRunUpload(curDir, null, folderPickMode == 0) }
-                .setNeutralButton("System picker") { _, _ -> launchSystemFolderPicker() }.setNegativeButton("Cancel", null).show()
-              lv.setOnItemClickListener { _, _, p, _ -> val target = rows[p].second; if (target != null && target.isDirectory) loadDir(target) }
+              alertRef = dlg().setTitle("File Manager — Mark & Upload").setView(wrap)
+                .setPositiveButton("Upload") { _, _ ->
+                  val marked = rows.filter { !it.isBack && it.checked }; val webDrop = folderPickMode == 0
+                  val picked = if (marked.isNotEmpty()) marked else rows.filter { !it.isBack }
+                  scanItemsAndUpload(picked, curDir.name, if (webDrop) (cbKeep?.isChecked == true) else ghKeepRoot, webDrop)
+                }.setNeutralButton("System picker") { _, _ -> launchSystemFolderPicker() }.setNegativeButton("Cancel", null).show()
+              updateBtns()
             }
 
-            private fun scanAndRunUpload(dirFile: File?, treeUri: Uri?, webDrop: Boolean) {
-              val cancelled = AtomicBoolean(false); val wait = dlg().setTitle("Scanning folder...").setMessage("Reading files and subfolders...").setCancelable(true).setOnCancelListener { cancelled.set(true) }.show()
+            private fun showTreeChecklist(treeUri: Uri, webDrop: Boolean) {
+              val wait = dlg().setTitle("Reading folder...").setMessage("Loading items...").setCancelable(false).show()
               Thread {
                 try {
-                  val entries = mutableListOf<UploadEntry>(); val folderSet = HashSet<String>(); var rootName = "Folder"
-                  if (dirFile != null) {
-                    rootName = dirFile.name.ifEmpty { "Folder" }
-                    fun walkF(d: File, prefix: String) {
-                      if (cancelled.get()) return
-                      for (ch in (d.listFiles() ?: emptyArray()).sortedBy { it.name.lowercase(Locale.US) }) {
-                        if (cancelled.get()) break; if (ch.name == ".git") continue
-                        val rel = if (prefix.isEmpty()) ch.name else "$prefix/${ch.name}"
-                        if (ch.isDirectory) { folderSet.add(rel); walkF(ch, rel) } else if (ch.isFile) entries.add(UploadEntry(rel, ch.length(), ch, null))
-                      }
-                    }
-                    walkF(dirFile, "")
-                  } else if (treeUri != null) {
-                    val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-                    contentResolver.query(DocumentsContract.buildDocumentUriUsingTree(treeUri, rootId), arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst() && !c.getString(0).isNullOrBlank()) rootName = c.getString(0) }
-                    fun walkU(docId: String, prefix: String) {
-                      if (cancelled.get()) return
-                      contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId), arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE), null, null, null)?.use { c ->
-                        while (c.moveToNext() && !cancelled.get()) {
-                          val id = c.getString(0) ?: continue; val name = c.getString(1) ?: continue; val mime = c.getString(2) ?: ""; val size = if (!c.isNull(3)) c.getLong(3) else 0L
-                          if (name == ".git") continue; val rel = if (prefix.isEmpty()) name else "$prefix/$name"
-                          if (mime == DocumentsContract.Document.MIME_TYPE_DIR) { folderSet.add(rel); walkU(id, rel) } else entries.add(UploadEntry(rel, size, null, DocumentsContract.buildDocumentUriUsingTree(treeUri, id)))
-                        }
-                      }
-                    }
-                    walkU(rootId, "")
+                  val rootId = DocumentsContract.getTreeDocumentId(treeUri); var rootName = "Folder"
+                  contentResolver.query(DocumentsContract.buildDocumentUriUsingTree(treeUri, rootId), arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst() && !c.getString(0).isNullOrBlank()) rootName = c.getString(0) }
+                  val list = mutableListOf<PickItem>()
+                  contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, rootId), arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE), null, null, null)?.use { c ->
+                    while (c.moveToNext()) { val id = c.getString(0) ?: continue; val name = c.getString(1) ?: continue; val mime = c.getString(2) ?: ""; val sz = if (!c.isNull(3)) c.getLong(3) else 0L; if (name != ".git") list.add(PickItem(name, mime == DocumentsContract.Document.MIME_TYPE_DIR, sz, null, DocumentsContract.buildDocumentUriUsingTree(treeUri, id))) }
                   }
+                  list.sortWith(compareBy<PickItem> { !it.isDir }.thenBy { it.name.lowercase(Locale.US) })
+                  runOnUiThread {
+                    if (wait.isShowing) wait.dismiss(); if (list.isEmpty()) { toast("No files in $rootName"); return@runOnUiThread }
+                    val labels = list.map { if (it.isDir) "\uD83D\uDCC1  ${it.name}/" else "\uD83D\uDCC4  ${it.name}  (${fmtSize(it.size)})" }.toTypedArray()
+                    val checked = BooleanArray(list.size) { false }
+                    val alert = dlg().setTitle("$rootName — Mark items").setMultiChoiceItems(labels, checked) { d, i, k -> checked[i] = k; (d as? AlertDialog)?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = checked.any { it } }
+                      .setPositiveButton("Upload") { _, _ -> scanItemsAndUpload(list.filterIndexed { i, _ -> checked[i] }, rootName, if (webDrop) false else ghKeepRoot, webDrop) }
+                      .setNeutralButton("Select all", null).setNegativeButton("Cancel", null).show()
+                    val posBtn = alert.getButton(AlertDialog.BUTTON_POSITIVE); val neuBtn = alert.getButton(AlertDialog.BUTTON_NEUTRAL); posBtn.isEnabled = false
+                    neuBtn.setOnClickListener { val next = !checked.all { it }; val lv = alert.listView; for (i in checked.indices) { checked[i] = next; lv.setItemChecked(i, next) }; posBtn.isEnabled = checked.any { it }; neuBtn.text = if (next) "Clear" else "Select all" }
+                  }
+                } catch (e: Exception) { runOnUiThread { if (wait.isShowing) wait.dismiss(); toast("Could not read folder: ${e.message}") } }
+              }.start()
+            }
+
+            private fun scanItemsAndUpload(picked: List<PickItem>, rootName: String, keepRoot: Boolean, webDrop: Boolean) {
+              if (picked.isEmpty()) { toast("Mark at least one item"); return }
+              val cancelled = AtomicBoolean(false); val wait = dlg().setTitle("Scanning selected items...").setMessage("Reading files & subfolders...").setCancelable(true).setOnCancelListener { cancelled.set(true) }.show()
+              Thread {
+                try {
+                  val entries = mutableListOf<UploadEntry>(); val folderSet = HashSet<String>()
+                  fun walkF(d: File, prefix: String) {
+                    if (cancelled.get()) return
+                    for (ch in (d.listFiles() ?: emptyArray()).sortedBy { it.name.lowercase(Locale.US) }) { if (cancelled.get()) break; if (ch.name == ".git") continue; val rel = if (prefix.isEmpty()) ch.name else "$prefix/${ch.name}"; if (ch.isDirectory) { folderSet.add(rel); walkF(ch, rel) } else if (ch.isFile) entries.add(UploadEntry(rel, ch.length(), ch, null)) }
+                  }
+                  fun walkU(treeUri: Uri, docId: String, prefix: String) {
+                    if (cancelled.get()) return
+                    contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId), arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE), null, null, null)?.use { c ->
+                      while (c.moveToNext() && !cancelled.get()) { val id = c.getString(0) ?: continue; val name = c.getString(1) ?: continue; val mime = c.getString(2) ?: ""; val sz = if (!c.isNull(3)) c.getLong(3) else 0L; if (name == ".git") continue; val rel = if (prefix.isEmpty()) name else "$prefix/$name"; if (mime == DocumentsContract.Document.MIME_TYPE_DIR) { folderSet.add(rel); walkU(treeUri, id, rel) } else entries.add(UploadEntry(rel, sz, null, DocumentsContract.buildDocumentUriUsingTree(treeUri, id))) }
+                    }
+                  }
+                  for (it in picked) { if (cancelled.get()) break; if (!it.isDir) entries.add(UploadEntry(it.name, it.size, it.file, it.uri)) else { folderSet.add(it.name); if (it.file != null) walkF(it.file, it.name) else if (it.uri != null) walkU(it.uri, DocumentsContract.getDocumentId(it.uri), it.name) } }
                   if (cancelled.get()) return@Thread
-                  val basePrefix = if (webDrop) sanitizeName(rootName).ifEmpty { "Folder" } else listOfNotNull(ghSubpath.takeIf { it.isNotEmpty() }, if (ghKeepRoot) sanitizeName(rootName).takeIf { it.isNotEmpty() } else null).joinToString("/")
+                  val basePrefix = if (webDrop) (if (keepRoot) sanitizeName(rootName) else "") else listOfNotNull(ghSubpath.takeIf { it.isNotEmpty() }, if (keepRoot) sanitizeName(rootName).takeIf { it.isNotEmpty() } else null).joinToString("/")
                   val mapped = entries.map { e -> UploadEntry(if (basePrefix.isEmpty()) e.relPath else "$basePrefix/${e.relPath}", e.size, e.file, e.uri) }
                   runOnUiThread {
                     if (cancelled.get() || !wait.isShowing) return@runOnUiThread; wait.dismiss()
-                    if (mapped.isEmpty()) { toast("No files found in $rootName"); return@runOnUiThread }
+                    if (mapped.isEmpty()) { toast("No files found in marked items"); return@runOnUiThread }
                     if (webDrop) {
-                      if (mapped.size > 100) dlg().setTitle("$rootName (${mapped.size} files)").setMessage("GitHub web page allows max 100 files at once.\n\nUse Menu -> Upload folder to GitHub (API) for all ${mapped.size} files, or attach first 100 here.").setPositiveButton("Attach first 100") { _, _ -> dropFolderIntoGithubWeb(mapped.take(100)) }.setNeutralButton("Use API upload") { _, _ -> openGithubUploadDialog() }.setNegativeButton("Cancel", null).show()
+                      if (mapped.size > 100) dlg().setTitle("${mapped.size} files selected").setMessage("GitHub web page allows max 100 files at once.\n\nUse Menu -> Upload folder to GitHub (API) for all ${mapped.size} files, or attach first 100 here.").setPositiveButton("Attach first 100") { _, _ -> dropFolderIntoGithubWeb(mapped.take(100)) }.setNeutralButton("Use API upload") { _, _ -> openGithubUploadDialog() }.setNegativeButton("Cancel", null).show()
                       else dropFolderIntoGithubWeb(mapped)
                     } else {
                       val brLabel = ghBranch.ifEmpty { "default" }; val dest = if (basePrefix.isEmpty()) "root" else basePrefix
-                      dlg().setTitle("Upload to GitHub?").setMessage("Folder: $rootName\nFiles: ${mapped.size} (subfolders: ${folderSet.size})\nRepo: $ghRepo ($brLabel)\nPath: /$dest").setPositiveButton("Upload") { _, _ -> runGithubUpload(mapped, ghRepo, ghBranch, ghMsg, ghToken) }.setNegativeButton("Cancel", null).show()
+                      dlg().setTitle("Upload to GitHub?").setMessage("Files: ${mapped.size} (folders: ${folderSet.size})\nRepo: $ghRepo ($brLabel)\nPath: /$dest").setPositiveButton("Upload") { _, _ -> runGithubUpload(mapped, ghRepo, ghBranch, ghMsg, ghToken) }.setNegativeButton("Cancel", null).show()
                     }
                   }
-                } catch (e: Exception) { runOnUiThread { if (wait.isShowing) wait.dismiss(); if (!cancelled.get()) toast("Could not read folder: ${e.message}") } }
+                } catch (e: Exception) { runOnUiThread { if (wait.isShowing) wait.dismiss(); if (!cancelled.get()) toast("Error reading items: ${e.message}") } }
               }.start()
             }
 
@@ -1138,11 +1022,11 @@ jobs:
 
             private fun dropFolderIntoGithubWeb(entries: List<UploadEntry>) {
               val w = tabs.getOrNull(cur)?.web ?: return; val cancelled = AtomicBoolean(false)
-              val progDlg = dlg().setTitle("Adding folder to GitHub").setMessage("Preparing ${entries.size} files...").setCancelable(false).setNegativeButton("Cancel") { _, _ -> cancelled.set(true) }.show()
+              val progDlg = dlg().setTitle("Adding files to GitHub").setMessage("Preparing ${entries.size} files...").setCancelable(false).setNegativeButton("Cancel") { _, _ -> cancelled.set(true) }.show()
               fun evalSync(js: String): String { val l = CountDownLatch(1); var r = ""; runOnUiThread { w.evaluateJavascript(js) { x -> r = x ?: ""; l.countDown() } }; l.await(15, TimeUnit.SECONDS); return r }
               Thread {
                 try {
-                  evalSync("""(function(){window.__abhGhFiles=[];window.__abhGhAdd=function(rp,mm,b64){var bin=atob(b64),u8=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);var f=new File([u8],rp.split('/').pop(),{type:mm||'application/octet-stream'});try{Object.defineProperty(f,'webkitRelativePath',{value:rp});}catch(e){}window.__abhGhFiles.push({path:rp,file:f});};window.__abhGhDrop=function(){var list=window.__abhGhFiles||[];window.__abhGhFiles=[];if(!list.length)return 'EMPTY';var fa=document.querySelector('file-attachment')||document.querySelector('.js-upload-manifest-file-container');if(!fa)return 'NO_DROPZONE';try{fa.setAttribute('directory','');}catch(e){}var acc=false,onAcc=function(){acc=true;};fa.addEventListener('file-attachment-accepted',onAcc,{once:true});function mkD(n,fp){return{isFile:false,isDirectory:true,name:n,fullPath:fp,_c:[],_m:{},createReader:function(){var a=this._c.slice(),d=false;return{readEntries:function(cb){if(d)cb([]);else{d=true;cb(a);}}};}};}var root=mkD('',''),rDt=new DataTransfer();for(var i=0;i<list.length;i++){var it=list[i];rDt.items.add(it.file);var ps=it.path.split('/'),c=root,ac='';for(var p=0;p<ps.length-1;p++){ac+='/'+ps[p];if(!c._m[ps[p]]){var s=mkD(ps[p],ac);c._m[ps[p]]=s;c._c.push(s);}c=c._m[ps[p]];}(function(f,fp,fn){c._c.push({isFile:true,isDirectory:false,name:fn,fullPath:'/'+fp,file:function(cb){cb(f);}});})(it.file,it.path,ps[ps.length-1]);}var dtI=[];for(var k=0;k<root._c.length;k++){(function(en){dtI.push({kind:'file',type:en.isFile?'application/octet-stream':'',getAsFile:function(){return null;},webkitGetAsEntry:function(){return en;}});})(root._c[k]);}try{Object.defineProperty(rDt,'items',{value:dtI,configurable:true});}catch(e){}['dragenter','dragover','drop'].forEach(function(tp){var ev=new DragEvent(tp,{bubbles:true,cancelable:true,dataTransfer:rDt});try{Object.defineProperty(ev,'dataTransfer',{value:rDt,configurable:true});}catch(e){}fa.dispatchEvent(ev);});setTimeout(function(){fa.removeEventListener('file-attachment-accepted',onAcc);if(!acc&&!document.querySelector('.js-upload-manifest-file,.js-upload-progress')){var inp=fa.querySelector('input[type="file"]')||document.querySelector('#upload-manifest-files-input,input[type="file"]');if(inp){try{var rDt2=new DataTransfer();for(var i=0;i<list.length;i++)rDt2.items.add(list[i].file);inp.files=rDt2.files;inp.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}}}},350);return 'OK:'+list.length;};return 'INIT';})();""")
+                  evalSync("""(function(){window.__abhGhFiles=[];window.__abhGhAdd=function(rp,mm,b64){var bin=atob(b64),u8=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);var f=new File([u8],rp.split('/').pop(),{type:mm||'application/octet-stream'});try{Object.defineProperty(f,'webkitRelativePath',{value:rp});}catch(e){}window.__abhGhFiles.push({path:rp,file:f});};window.__abhGhDrop=function(){var list=window.__abhGhFiles||[];window.__abhGhFiles=[];if(!list.length)return 'EMPTY';var fa=document.querySelector('file-attachment')||document.querySelector('.js-upload-manifest-file-container');if(!fa)return 'NO_DROPZONE';try{fa.setAttribute('directory','');}catch(e){}var acc=false,onAcc=function(){acc=true;};fa.addEventListener('file-attachment-accepted',onAcc,{once:true});function mkD(n,fp){return{isFile:false,isDirectory:true,name:n,fullPath:fp,_c:[],_m:{},createReader:function(){var a=this._c.slice(),d=false;return{readEntries:function(cb){if(d)cb([]);else{d=true;cb(a);}}};}};}var root=mkD('',''),rDt=new DataTransfer();for(var i=0;i<list.length;i++){var it=list[i];rDt.items.add(it.file);var ps=it.path.split('/'),c=root,ac='';for(var p=0;p<ps.length-1;p++){ac+='/'+ps[p];if(!c._m[ps[p]]){var s=mkD(ps[p],ac);c._m[ps[p]]=s;c._c.push(s);}c=c._m[ps[p]];}(function(f,fp,fn){c._c.push({isFile:true,isDirectory:false,name:fn,fullPath:'/'+fp,file:function(cb){cb(f);}});})(it.file,it.path,ps[ps.length-1]);}var dtI=[];for(var k=0;k<root._c.length;k++){(function(en){dtI.push({kind:'file',type:en.isFile?'application/octet-stream':'',getAsFile:function(){return null;},webkitGetAsEntry:function(){return en;}});})(root._c[k]);}var wrapDt=rDt;try{wrapDt=Object.create(DataTransfer.prototype);Object.defineProperties(wrapDt,{dropEffect:{value:'copy',writable:true},effectAllowed:{value:'all',writable:true},types:{value:['Files']},files:{value:rDt.files},items:{value:dtI},getData:{value:function(){return '';}},setData:{value:function(){}},clearData:{value:function(){}}});}catch(e){}['dragenter','dragover','drop'].forEach(function(tp){var ev=new DragEvent(tp,{bubbles:true,cancelable:true});try{Object.defineProperty(ev,'dataTransfer',{value:wrapDt,configurable:true});}catch(e){}fa.dispatchEvent(ev);});setTimeout(function(){fa.removeEventListener('file-attachment-accepted',onAcc);if(!acc&&!document.querySelector('.js-upload-manifest-file,.js-upload-progress')){var inp=fa.querySelector('input[type="file"]')||document.querySelector('#upload-manifest-files-input,input[type="file"]');if(inp){try{var rDt2=new DataTransfer();for(var i=0;i<list.length;i++)rDt2.items.add(list[i].file);inp.files=rDt2.files;inp.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}}}},400);return 'OK:'+list.length;};return 'INIT';})();""")
                   var skippedBig = 0; var added = 0
                   for (i in entries.indices) {
                     if (cancelled.get()) break; val e = entries[i]; if (e.size > 20L * 1024L * 1024L) { skippedBig++; continue }
@@ -1163,9 +1047,8 @@ jobs:
             }
 
             private fun parseGithubUrl(rawUrl: String): Triple<String, String, String> {
-              if (rawUrl.isEmpty()) return Triple("", "", "")
-              val uri = Uri.parse(rawUrl); val host = (uri.host ?: "").lowercase(Locale.US); if (host != "github.com" && host != "www.github.com") return Triple("", "", "")
-              val segs = uri.pathSegments ?: return Triple("", "", "")
+              if (rawUrl.isEmpty()) return Triple("", "", ""); val uri = Uri.parse(rawUrl); val host = (uri.host ?: "").lowercase(Locale.US)
+              if (host != "github.com" && host != "www.github.com") return Triple("", "", ""); val segs = uri.pathSegments ?: return Triple("", "", "")
               if (segs.size < 2 || segs[0].lowercase(Locale.US) in setOf("settings", "marketplace", "explore", "notifications", "pulls", "issues", "new", "login", "signup", "orgs", "topics", "search", "trending")) return Triple("", "", "")
               var branch = ""; var sub = ""
               if (segs.size >= 4 && (segs[2] == "tree" || segs[2] == "blob" || segs[2] == "upload")) { branch = segs[3]; if (segs[2] == "tree" && segs.size > 4) sub = segs.drop(4).joinToString("/") }
@@ -1173,8 +1056,7 @@ jobs:
             }
 
             private fun openGithubUploadDialog() {
-              val curUrl = if (tabs.getOrNull(cur)?.home == false) (tabs[cur].web.url ?: "") else ""
-              val (urlRepo, urlBranch, urlSub) = parseGithubUrl(curUrl)
+              val curUrl = if (tabs.getOrNull(cur)?.home == false) (tabs[cur].web.url ?: "") else ""; val (urlRepo, urlBranch, urlSub) = parseGithubUrl(curUrl)
               val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(12), dp(20), dp(8)) }
               fun lbl(t: String) { box.addView(TextView(this).apply { text = t; textSize = 13f; setTextColor(col.sec); setPadding(0, dp(8), 0, dp(2)) }) }
               fun inp(hint: String, def: String, pass: Boolean = false) = EditText(this).apply { this.hint = hint; setText(def); isSingleLine = true; setTextColor(col.text); setHintTextColor(col.sec); if (pass) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; box.addView(this) }
@@ -1184,13 +1066,11 @@ jobs:
               lbl("Commit message"); val etMsg = inp("Upload folder", "Upload folder")
               lbl("GitHub Token (saved on device)"); val etToken = inp("ghp_... or github_pat_...", prefs.getString("ghToken", "") ?: "", true)
               val tokenHelp = TextView(this).apply { text = "Tap here to create a GitHub Token (Contents: Read & write)"; textSize = 12f; setTextColor(0xFF2D7FF9.toInt()); setPadding(0, dp(4), 0, dp(6)); box.addView(this) }
-              val cbKeepRoot = CheckBox(this).apply { text = "Keep selected folder name (e.g. MyFolder/...)"; isChecked = true; setTextColor(col.text); box.addView(this) }
+              val cbKeepRoot = CheckBox(this).apply { text = "Keep parent folder name (e.g. MyFolder/...)"; isChecked = false; setTextColor(col.text); box.addView(this) }
               val d = dlg().setTitle("Upload folder to GitHub (API)").setView(ScrollView(this).apply { addView(box) })
-                .setPositiveButton("Choose folder") { _, _ ->
+                .setPositiveButton("Open File Manager") { _, _ ->
                   var repo = etRepo.text.toString().trim().trim('/'); if (repo.startsWith("http")) repo = parseGithubUrl(repo).first
-                  val tok = etToken.text.toString().trim()
-                  if (!repo.contains("/") || repo.split("/").size != 2) { toast("Enter repo as owner/repo"); return@setPositiveButton }
-                  if (tok.isEmpty()) { toast("Enter your GitHub Token"); return@setPositiveButton }
+                  val tok = etToken.text.toString().trim(); if (!repo.contains("/") || repo.split("/").size != 2) { toast("Enter repo as owner/repo"); return@setPositiveButton }; if (tok.isEmpty()) { toast("Enter your GitHub Token"); return@setPositiveButton }
                   ghRepo = repo; ghBranch = etBranch.text.toString().trim(); ghSubpath = sanitizeFolder(etSub.text.toString().trim()); ghMsg = etMsg.text.toString().trim().ifEmpty { "Upload folder" }; ghToken = tok; ghKeepRoot = cbKeepRoot.isChecked
                   prefs.edit().putString("ghRepo", repo).putString("ghToken", tok).apply(); startFolderPick(1)
                 }.setNegativeButton("Cancel", null).show()
@@ -1256,9 +1136,7 @@ jobs:
                     if (progDlg.isShowing) progDlg.dismiss(); toast("Uploaded $uploadedCount file(s) to $repo ($branch)" + if (skippedBig > 0) " ($skippedBig >25MB skipped)" else "")
                     if (tabs.getOrNull(cur)?.home == false && (tabs[cur].web.url ?: "").contains(repo, ignoreCase = true)) tabs[cur].web.reload()
                   }
-                } catch (e: Exception) {
-                  runOnUiThread { if (progDlg.isShowing) progDlg.dismiss(); if (!cancelled.get()) dlg().setTitle("Upload failed").setMessage((e.message ?: "Unknown error").take(500)).setPositiveButton("OK", null).show() else toast("Upload cancelled") }
-                }
+                } catch (e: Exception) { runOnUiThread { if (progDlg.isShowing) progDlg.dismiss(); if (!cancelled.get()) dlg().setTitle("Upload failed").setMessage((e.message ?: "Unknown error").take(500)).setPositiveButton("OK", null).show() else toast("Upload cancelled") } }
               }.start()
             }
 
@@ -1315,8 +1193,8 @@ jobs:
               if (requestCode == REQ_FILE) { fileCb?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data)); fileCb = null }
               else if (requestCode == REQ_TREE) { val u = data?.data; if (resultCode == RESULT_OK && u != null) { try { contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (e: Exception) { }; prefs.edit().putString("folder", u.toString()).apply(); updateSettingsUi(); toast("Download folder changed") } }
               else if (requestCode == REQ_ALL_FILES) { if (hasStorageAccess()) showInAppFolderPicker(Environment.getExternalStorageDirectory()) else toast("Allow file access or use System picker") }
-              else if (requestCode == REQ_WEB_TREE) { val u = data?.data; if (resultCode == RESULT_OK && u != null) scanAndRunUpload(null, u, true) }
-              else if (requestCode == REQ_GH_TREE) { val u = data?.data; if (resultCode == RESULT_OK && u != null) scanAndRunUpload(null, u, false) }
+              else if (requestCode == REQ_WEB_TREE) { val u = data?.data; if (resultCode == RESULT_OK && u != null) showTreeChecklist(u, true) }
+              else if (requestCode == REQ_GH_TREE) { val u = data?.data; if (resultCode == RESULT_OK && u != null) showTreeChecklist(u, false) }
               else super.onActivityResult(requestCode, resultCode, data)
             }
 
@@ -1354,20 +1232,12 @@ jobs:
               pm.show()
             }
 
-            private fun retryAllFailed() {
-              val toRun = items.filter { it.state == 3 || it.state == 4 }.reversed(); if (toRun.isEmpty()) return
-              for (d in toRun) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; if (d.kind == 0) { val ck = cookieText(d.link, d.profile); exec.execute { runDownload(d, ck, g) } } else directExec.execute { runDirect(d, g) } }
-              refreshDl(); toast("Starting ${toRun.size} downloads")
-            }
+            private fun retryAllFailed() { val toRun = items.filter { it.state == 3 || it.state == 4 }.reversed(); if (toRun.isEmpty()) return; for (d in toRun) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; if (d.kind == 0) { val ck = cookieText(d.link, d.profile); exec.execute { runDownload(d, ck, g) } } else directExec.execute { runDirect(d, g) } }; refreshDl(); toast("Starting ${toRun.size} downloads") }
 
             private fun clearDownloadsTab() {
               if (dlTab == 0) {
                 val active = items.filter { it.state != 2 }; if (active.isEmpty()) return
-                dlg().setTitle("Clear downloading list?").setMessage("Remove all ${active.size} active/failed items?").setPositiveButton("Clear") { _, _ ->
-                  activeBatchCancel?.set(true)
-                  for (d in active) { d.stop = 2; d.gen++; if (d.kind == 0) try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }; File(filesDir, "parts/" + d.id).deleteRecursively() }
-                  items.removeAll { it.state != 2 }; saveItemsAsync(); refreshDl(); toast("Cleared")
-                }.setNegativeButton("Cancel", null).show()
+                dlg().setTitle("Clear downloading list?").setMessage("Remove all ${active.size} active/failed items?").setPositiveButton("Clear") { _, _ -> activeBatchCancel?.set(true); for (d in active) { d.stop = 2; d.gen++; if (d.kind == 0) try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }; File(filesDir, "parts/" + d.id).deleteRecursively() }; items.removeAll { it.state != 2 }; saveItemsAsync(); refreshDl(); toast("Cleared") }.setNegativeButton("Cancel", null).show()
               } else {
                 val done = items.filter { it.state == 2 }; if (done.isEmpty()) return
                 dlg().setTitle("Clear history?").setMessage("Remove ${done.size} items from this list? (Files on your phone will stay)").setPositiveButton("Clear") { _, _ -> items.removeAll { it.state == 2 }; saveItemsAsync(); refreshDl(); toast("Cleared") }.setNegativeButton("Cancel", null).show()
@@ -1386,33 +1256,22 @@ jobs:
             private fun askDownload() {
               val t = tabs[cur]; val page = if (t.home) null else t.web.url
               if (page == null) { toast("Open a video page first"); return }; if (!ready) { toast("Downloader is starting, try again in a moment"); return }
-              if (isYt(page) && ytId(page).isEmpty()) { toast("Open a video first, then tap download"); return }
-              longPressVideo(page, t.web.title ?: "Video")
+              if (isYt(page) && ytId(page).isEmpty()) { toast("Open a video first, then tap download"); return }; longPressVideo(page, t.web.title ?: "Video")
             }
 
-            private fun standardQualities(): List<Q> {
-              val list = mutableListOf<Q>(); list.add(Q("Original quality (best)", "bv*+ba/b", false, 0L, "best", ""))
-              for (h in listOf(2160, 1440, 1080, 720, 480, 360, 240, 144)) list.add(Q("${h}p (or the closest lower)", "bv*[height<=$h]+ba/b[height<=$h]", false, 0L, "h$h", "auto"))
-              list.add(Q("Audio only (MP3)", "", true, 0L, "mp3", "audio")); return list
-            }
+            private fun standardQualities(): List<Q> { val list = mutableListOf<Q>(); list.add(Q("Original quality (best)", "bv*+ba/b", false, 0L, "best", "")); for (h in listOf(2160, 1440, 1080, 720, 480, 360, 240, 144)) list.add(Q("${h}p (or the closest lower)", "bv*[height<=$h]+ba/b[height<=$h]", false, 0L, "h$h", "auto")); list.add(Q("Audio only (MP3)", "", true, 0L, "mp3", "audio")); return list }
 
             private fun showQualities(link: String, page: String, title: String, qs: List<Q>) {
-              val vid = vidOf(link)
-              val labels = qs.map { when (qStatus(vid, it.key)) { 2 -> "\u2714\u2714 ${it.label}  (downloaded)"; 1 -> "${it.label}  (downloading...)"; else -> it.label } }.toTypedArray()
+              val vid = vidOf(link); val labels = qs.map { when (qStatus(vid, it.key)) { 2 -> "\u2714\u2714 ${it.label}  (downloaded)"; 1 -> "${it.label}  (downloading...)"; else -> it.label } }.toTypedArray()
               dlg().setTitle("Choose quality").setItems(labels) { _, i -> val q = qs[i]; when (qStatus(vid, q.key)) { 2 -> toast("Already downloaded in this quality"); 1 -> toast("This quality is already downloading"); else -> enqueue(link, page, title, q) } }.show()
             }
 
             private fun longPressVideo(url: String, title: String = "Video") {
-              if (!ready) { toast("Downloader is starting, try again in a moment"); return }
-              val link = normalUrl(url); val ck = cookieText(link, tabs.getOrNull(cur)?.profile ?: "")
+              if (!ready) { toast("Downloader is starting, try again in a moment"); return }; val link = normalUrl(url); val ck = cookieText(link, tabs.getOrNull(cur)?.profile ?: "")
               val wait = dlg().setTitle("Please wait").setMessage("Checking this video's qualities...").setCancelable(true).setOnCancelListener { try { YoutubeDL.getInstance().destroyProcessById(qPid) } catch (e: Exception) { } }.show()
               Thread {
                 var err = ""; val res: List<Q> = try { fetchQualities(link, ck) } catch (e: Exception) { err = e.message ?: ""; emptyList() }
-                runOnUiThread {
-                  if (!wait.isShowing) return@runOnUiThread; wait.dismiss()
-                  if (res.isNotEmpty()) showQualities(link, url, title, res)
-                  else dlg().setTitle("Could not read qualities").setMessage(if (err.isEmpty()) "The downloader could not read this video's quality list." else err.take(500)).setPositiveButton("Standard list") { _, _ -> showQualities(link, url, title, standardQualities()) }.setNegativeButton("Cancel", null).show()
-                }
+                runOnUiThread { if (!wait.isShowing) return@runOnUiThread; wait.dismiss(); if (res.isNotEmpty()) showQualities(link, url, title, res) else dlg().setTitle("Could not read qualities").setMessage(if (err.isEmpty()) "The downloader could not read this video's quality list." else err.take(500)).setPositiveButton("Standard list") { _, _ -> showQualities(link, url, title, standardQualities()) }.setNegativeButton("Cancel", null).show() }
               }.start()
             }
 
@@ -1420,57 +1279,32 @@ jobs:
               val cf = File(cacheDir, "cookies_q.txt"); val pid = "q" + System.nanoTime(); qPid = pid; val finished = AtomicBoolean(false)
               Thread { try { Thread.sleep(30000) } catch (e: Exception) { }; if (!finished.get()) try { YoutubeDL.getInstance().destroyProcessById(pid) } catch (e: Exception) { } }.start()
               try {
-                val req = YoutubeDLRequest(link); req.addOption("--dump-single-json"); req.addOption("--no-playlist")
-                if (cookies != null) { cf.writeText(cookies); req.addOption("--cookies", cf.absolutePath) }
+                val req = YoutubeDLRequest(link); req.addOption("--dump-single-json"); req.addOption("--no-playlist"); if (cookies != null) { cf.writeText(cookies); req.addOption("--cookies", cf.absolutePath) }
                 val jsonLine = YoutubeDL.getInstance().execute(req, pid).out.lines().lastOrNull { it.trimStart().startsWith("{") } ?: return emptyList()
-                val arr = JSONObject(jsonLine).optJSONArray("formats") ?: return emptyList()
-                val heights = java.util.TreeMap<Int, Long>(); val fpsBy = java.util.HashMap<Int, Int>(); var audioBest = 0L
-                for (i in 0 until arr.length()) {
-                  val f = arr.getJSONObject(i); val vc = f.optString("vcodec", "none"); val ac = f.optString("acodec", "none"); val h = f.optInt("height", 0)
-                  val size = maxOf(f.optLong("filesize", 0L), f.optLong("filesize_approx", 0L))
-                  if (vc != "none" && vc != "null" && h > 0) { heights[h] = maxOf(heights[h] ?: 0L, size); val fp = f.optDouble("fps", 0.0).toInt(); if (fp > (fpsBy[h] ?: 0)) fpsBy[h] = fp }
-                  else if (vc == "none" && ac != "none" && ac != "null") audioBest = maxOf(audioBest, size)
-                }
-                if (heights.isEmpty()) return emptyList()
-                val list = mutableListOf<Q>(); val top = heights.lastKey(); val ab = audioBest
-                fun sz(v: Long) = if (v > 0) " - ~" + fmtSize(v + ab) else ""
-                fun lab(h: Int): String { val fp = fpsBy[h] ?: 0; return "${h}p" + (if (fp > 30) "$fp" else "") }
+                val arr = JSONObject(jsonLine).optJSONArray("formats") ?: return emptyList(); val heights = java.util.TreeMap<Int, Long>(); val fpsBy = java.util.HashMap<Int, Int>(); var audioBest = 0L
+                for (i in 0 until arr.length()) { val f = arr.getJSONObject(i); val vc = f.optString("vcodec", "none"); val ac = f.optString("acodec", "none"); val h = f.optInt("height", 0); val size = maxOf(f.optLong("filesize", 0L), f.optLong("filesize_approx", 0L)); if (vc != "none" && vc != "null" && h > 0) { heights[h] = maxOf(heights[h] ?: 0L, size); val fp = f.optDouble("fps", 0.0).toInt(); if (fp > (fpsBy[h] ?: 0)) fpsBy[h] = fp } else if (vc == "none" && ac != "none" && ac != "null") audioBest = maxOf(audioBest, size) }
+                if (heights.isEmpty()) return emptyList(); val list = mutableListOf<Q>(); val top = heights.lastKey(); val ab = audioBest
+                fun sz(v: Long) = if (v > 0) " - ~" + fmtSize(v + ab) else ""; fun lab(h: Int): String { val fp = fpsBy[h] ?: 0; return "${h}p" + (if (fp > 30) "$fp" else "") }
                 list.add(Q("Original quality (best) - ${lab(top)}${sz(heights[top] ?: 0L)}", "bv*+ba/b", false, (heights[top] ?: 0L) + ab, "best", ""))
                 for (h in heights.descendingKeySet()) if (h != top) { val v = heights[h] ?: 0L; list.add(Q("${lab(h)}${sz(v)}", "bv*[height<=$h]+ba/b[height<=$h]", false, v + ab, "h$h", "${h}p")) }
                 list.add(Q("Audio only (MP3)" + (if (ab > 0) " - ~${fmtSize(ab)}" else ""), "", true, ab, "mp3", "audio")); return list
               } finally { finished.set(true); cf.delete() }
             }
 
-            private fun enqueue(link: String, page: String, title: String, q: Q) {
-              val d = DlItem(title, 0, 0, null, null, ""); d.kind = 0; d.link = link; d.page = page; d.audio = q.audio; d.fmt = q.fmt; d.total = q.bytes; d.vid = vidOf(link); d.qkey = q.key; d.qtag = q.tag; d.profile = tabs.getOrNull(cur)?.profile ?: ""
-              items.add(0, d); dlTab = 0; flyToDownload(); toast("Added to Downloads"); startRun(d)
-            }
-
-            private fun startRun(d: DlItem) {
-              d.stop = 0; d.state = 0; d.gen++; val g = d.gen; if (dlPage.visibility == View.VISIBLE) refreshDl()
-              if (d.kind == 0) { val ck = cookieText(d.link, d.profile); exec.execute { runDownload(d, ck, g) } } else directExec.execute { runDirect(d, g) }
-            }
-
+            private fun enqueue(link: String, page: String, title: String, q: Q) { val d = DlItem(title, 0, 0, null, null, ""); d.kind = 0; d.link = link; d.page = page; d.audio = q.audio; d.fmt = q.fmt; d.total = q.bytes; d.vid = vidOf(link); d.qkey = q.key; d.qtag = q.tag; d.profile = tabs.getOrNull(cur)?.profile ?: ""; items.add(0, d); dlTab = 0; flyToDownload(); toast("Added to Downloads"); startRun(d) }
+            private fun startRun(d: DlItem) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; if (dlPage.visibility == View.VISIBLE) refreshDl(); if (d.kind == 0) { val ck = cookieText(d.link, d.profile); exec.execute { runDownload(d, ck, g) } } else directExec.execute { runDirect(d, g) } }
             private fun pauseItem(d: DlItem) { d.stop = 1; if (d.kind == 0) try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }; d.state = 4; scheduleSaveItems(); refreshDl() }
             private fun askDelete(d: DlItem) { dlg().setTitle("Delete?").setMessage(if (d.state == 2) "This will delete the file from your phone." else "This will cancel the download and remove it.").setPositiveButton("Delete") { _, _ -> deleteItem(d) }.setNegativeButton("Cancel", null).show() }
             private fun deleteItem(d: DlItem) { d.stop = 2; d.gen++; if (d.kind == 0) try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }; val us = d.uri; if (!us.isNullOrEmpty()) try { val u = Uri.parse(us); if (DocumentsContract.isDocumentUri(this, u)) DocumentsContract.deleteDocument(contentResolver, u) else contentResolver.delete(u, null, null) } catch (e: Exception) { }; File(filesDir, "parts/" + d.id).deleteRecursively(); items.remove(d); scheduleSaveItems(); refreshDl(); toast("Deleted") }
             private fun openPage(d: DlItem) { val u = if (d.page.isNotEmpty()) d.page else d.link; if (u.isEmpty()) { toast("No page saved"); return }; hidePages(); newTab(); showTab(tabs.size - 1); open(u) }
-
-            private fun cookieText(link: String, profile: String): String? {
-              if (!cookiesOn) return null; val host = Uri.parse(link).host ?: return null; if (!host.endsWith("youtube.com") && host != "youtu.be") return null
-              val raw = cookiesFor(profile).getCookie("https://www.youtube.com") ?: return null; val sb = StringBuilder("# Netscape HTTP Cookie File\n")
-              for (part in raw.split(";")) { val kv = part.trim().split("=", limit = 2); if (kv.size == 2 && kv[0].isNotEmpty()) sb.append(".youtube.com\tTRUE\t/\tTRUE\t2000000000\t${kv[0]}\t${kv[1]}\n") }
-              return sb.toString()
-            }
-
+            private fun cookieText(link: String, profile: String): String? { if (!cookiesOn) return null; val host = Uri.parse(link).host ?: return null; if (!host.endsWith("youtube.com") && host != "youtu.be") return null; val raw = cookiesFor(profile).getCookie("https://www.youtube.com") ?: return null; val sb = StringBuilder("# Netscape HTTP Cookie File\n"); for (part in raw.split(";")) { val kv = part.trim().split("=", limit = 2); if (kv.size == 2 && kv[0].isNotEmpty()) sb.append(".youtube.com\tTRUE\t/\tTRUE\t2000000000\t${kv[0]}\t${kv[1]}\n") }; return sb.toString() }
             private fun ui() { if (dlPage.visibility != View.VISIBLE) return; val now = System.currentTimeMillis(); val prev = lastUiUpdate.get(); if (now - prev >= 450 && lastUiUpdate.compareAndSet(prev, now)) runOnUiThread { if (dlPage.visibility == View.VISIBLE) refreshDl() } }
 
             private fun runDownload(d: DlItem, cookies: String?, g: Int) {
               if (d.stop != 0 || d.gen != g) return; d.state = 1; ui(); val dir = File(filesDir, "parts/" + d.id); val cf = File(cacheDir, "cookies" + d.id + ".txt")
               try {
                 dir.mkdirs(); val req = YoutubeDLRequest(d.link); val tag = if (d.qtag.isEmpty() || d.qtag == "audio") "" else if (d.qtag == "auto") " [%(height)sp]" else " [${d.qtag}]"
-                req.addOption("-o", dir.absolutePath + "/%(title).80s$tag.%(ext)s"); req.addOption("--no-playlist")
-                if (cookies != null) { cf.writeText(cookies); req.addOption("--cookies", cf.absolutePath) }
+                req.addOption("-o", dir.absolutePath + "/%(title).80s$tag.%(ext)s"); req.addOption("--no-playlist"); if (cookies != null) { cf.writeText(cookies); req.addOption("--cookies", cf.absolutePath) }
                 if (d.audio) { req.addOption("-x"); req.addOption("--audio-format", "mp3"); req.addOption("--audio-quality", "0") } else { req.addOption("-f", d.fmt); req.addOption("-S", "res,ext:mp4:m4a"); req.addOption("--merge-output-format", "mp4") }
                 YoutubeDL.getInstance().execute(req, d.id) { p, _, line -> if (d.gen == g) { if (p >= 0f) d.progress = p.toInt().coerceIn(0, 100); val m = SIZE_RE.find(line); if (m != null) d.sizeLabel = m.groupValues[2]; ui() } }
                 val f = (dir.listFiles() ?: emptyArray()).filter { !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.contains(".part-") }.maxByOrNull { it.length() } ?: throw Exception("No file was downloaded")
@@ -1483,9 +1317,7 @@ jobs:
               var curId = DocumentsContract.getTreeDocumentId(rootTree); var curUri = DocumentsContract.buildDocumentUriUsingTree(rootTree, curId)
               for (seg in relFolder.split("/").filter { it.isNotEmpty() }) {
                 var foundId: String? = null
-                contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(rootTree, curId), arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE), null, null, null)?.use { c ->
-                  while (c.moveToNext()) if (c.getString(1) == seg && c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) { foundId = c.getString(0); break }
-                }
+                contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(rootTree, curId), arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE), null, null, null)?.use { c -> while (c.moveToNext()) if (c.getString(1) == seg && c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) { foundId = c.getString(0); break } }
                 if (foundId != null) { curId = foundId!!; curUri = DocumentsContract.buildDocumentUriUsingTree(rootTree, curId) }
                 else { curUri = DocumentsContract.createDocument(contentResolver, curUri, DocumentsContract.Document.MIME_TYPE_DIR, seg) ?: return null; curId = DocumentsContract.getDocumentId(curUri) }
               }
@@ -1496,35 +1328,14 @@ jobs:
               synchronized(saveLock) {
                 val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
                 val cleanFolder = sanitizeFolder(d.folder); var uri: Uri? = null; val tree = prefs.getString("folder", "") ?: ""
-                if (tree.isNotEmpty()) try {
-                  val t = Uri.parse(tree); val parent = if (cleanFolder.isEmpty()) DocumentsContract.buildDocumentUriUsingTree(t, DocumentsContract.getTreeDocumentId(t)) else ensureSafDir(t, cleanFolder)
-                  if (parent != null) { deleteExistingSaf(f.name, t, DocumentsContract.getDocumentId(parent)); uri = DocumentsContract.createDocument(contentResolver, parent, mime, f.name) }
-                } catch (e: Exception) { uri = null }
-                if (uri == null) {
-                  val rel = if (cleanFolder.isEmpty()) Environment.DIRECTORY_DOWNLOADS else Environment.DIRECTORY_DOWNLOADS + "/" + cleanFolder
-                  deleteExistingMedia(f.name, rel)
-                  uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, f.name); put(MediaStore.MediaColumns.MIME_TYPE, mime); put(MediaStore.MediaColumns.RELATIVE_PATH, rel) })
-                }
-                val u = uri ?: throw Exception("Could not create file in the download folder")
-                contentResolver.openOutputStream(u)?.use { out -> f.inputStream().use { it.copyTo(out) } }; d.uri = u.toString(); d.mime = mime; d.name = f.name
+                if (tree.isNotEmpty()) try { val t = Uri.parse(tree); val parent = if (cleanFolder.isEmpty()) DocumentsContract.buildDocumentUriUsingTree(t, DocumentsContract.getTreeDocumentId(t)) else ensureSafDir(t, cleanFolder); if (parent != null) { deleteExistingSaf(f.name, t, DocumentsContract.getDocumentId(parent)); uri = DocumentsContract.createDocument(contentResolver, parent, mime, f.name) } } catch (e: Exception) { uri = null }
+                if (uri == null) { val rel = if (cleanFolder.isEmpty()) Environment.DIRECTORY_DOWNLOADS else Environment.DIRECTORY_DOWNLOADS + "/" + cleanFolder; deleteExistingMedia(f.name, rel); uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, f.name); put(MediaStore.MediaColumns.MIME_TYPE, mime); put(MediaStore.MediaColumns.RELATIVE_PATH, rel) }) }
+                val u = uri ?: throw Exception("Could not create file in the download folder"); contentResolver.openOutputStream(u)?.use { out -> f.inputStream().use { it.copyTo(out) } }; d.uri = u.toString(); d.mime = mime; d.name = f.name
               }
             }
 
-            private fun deleteExistingSaf(name: String, tree: Uri, parentDocId: String) {
-              try {
-                val ids = mutableListOf<String>()
-                contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId), arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c -> while (c.moveToNext()) if (c.getString(1) == name) ids.add(c.getString(0)) }
-                for (id in ids) DocumentsContract.deleteDocument(contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, id))
-              } catch (e: Exception) { }
-            }
-
-            private fun deleteExistingMedia(name: String, relPath: String) {
-              try {
-                val base = MediaStore.Downloads.EXTERNAL_CONTENT_URI; val rows = mutableListOf<Long>()
-                contentResolver.query(base, arrayOf(MediaStore.MediaColumns._ID), MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + "=?", arrayOf(name, "$relPath/"), null)?.use { c -> while (c.moveToNext()) rows.add(c.getLong(0)) }
-                for (id in rows) contentResolver.delete(ContentUris.withAppendedId(base, id), null, null)
-              } catch (e: Exception) { }
-            }
+            private fun deleteExistingSaf(name: String, tree: Uri, parentDocId: String) { try { val ids = mutableListOf<String>(); contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId), arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c -> while (c.moveToNext()) if (c.getString(1) == name) ids.add(c.getString(0)) }; for (id in ids) DocumentsContract.deleteDocument(contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, id)) } catch (e: Exception) { } }
+            private fun deleteExistingMedia(name: String, relPath: String) { try { val base = MediaStore.Downloads.EXTERNAL_CONTENT_URI; val rows = mutableListOf<Long>(); contentResolver.query(base, arrayOf(MediaStore.MediaColumns._ID), MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + "=?", arrayOf(name, "$relPath/"), null)?.use { c -> while (c.moveToNext()) rows.add(c.getLong(0)) }; for (id in rows) contentResolver.delete(ContentUris.withAppendedId(base, id), null, null) } catch (e: Exception) { } }
 
             private fun refreshDl() {
               var active = 0; var hasFailed = false; var hasPaused = false; val filtered = ArrayList<DlItem>(); val wantActive = dlTab == 0
@@ -1543,13 +1354,11 @@ jobs:
               val size = dp(44); val v = ImageView(this).apply { setBackgroundResource(R.drawable.bg_fab); setImageResource(R.drawable.ic_download); setPadding(dp(10), dp(10), dp(10), dp(10)) }
               val sx: Float; val sy: Float; if (fab.visibility == View.VISIBLE) { val fl = IntArray(2); fab.getLocationOnScreen(fl); sx = (fl[0] - rl[0] + (fab.width - size) / 2).toFloat(); sy = (fl[1] - rl[1] + (fab.height - size) / 2).toFloat() } else { sx = ((root.width - size) / 2).toFloat(); sy = root.height * 0.6f }
               root.addView(v, FrameLayout.LayoutParams(size, size)); v.x = sx; v.y = sy
-              v.animate().x((tl[0] - rl[0] + (target.width - size) / 2).toFloat()).y((tl[1] - rl[1] + (target.height - size) / 2).toFloat()).scaleX(0.35f).scaleY(0.35f).alpha(0.4f).setDuration(750).setInterpolator(AccelerateDecelerateInterpolator())
-                .withEndAction { root.removeView(v); target.animate().scaleX(1.3f).scaleY(1.3f).setDuration(120).withEndAction { target.animate().scaleX(1f).scaleY(1f).setDuration(120).start() }.start() }.start()
+              v.animate().x((tl[0] - rl[0] + (target.width - size) / 2).toFloat()).y((tl[1] - rl[1] + (target.height - size) / 2).toFloat()).scaleX(0.35f).scaleY(0.35f).alpha(0.4f).setDuration(750).setInterpolator(AccelerateDecelerateInterpolator()).withEndAction { root.removeView(v); target.animate().scaleX(1.3f).scaleY(1.3f).setDuration(120).withEndAction { target.animate().scaleX(1f).scaleY(1f).setDuration(120).start() }.start() }.start()
             }
 
             private fun startDirectNamed(url: String, titleHint: String, page: String, profile: String, folderPath: String, expectAudio: Boolean, uaHint: String? = null) {
-              val cleanTitle = sanitizeName(titleHint); val rawName = URLUtil.guessFileName(url, null, if (expectAudio) "audio/mpeg" else null)
-              val ext = urlExt(url).let { if (it in AUDIO_EXTS) ".$it" else if (expectAudio) ".mp3" else "" }; val useCustom = !isJunkTitle(cleanTitle)
+              val cleanTitle = sanitizeName(titleHint); val rawName = URLUtil.guessFileName(url, null, if (expectAudio) "audio/mpeg" else null); val ext = urlExt(url).let { if (it in AUDIO_EXTS) ".$it" else if (expectAudio) ".mp3" else "" }; val useCustom = !isJunkTitle(cleanTitle)
               val finalName = if (useCustom) cleanTitle + ext.ifEmpty { "." + rawName.substringAfterLast('.', "mp3") } else rawName
               val d = DlItem(if (useCustom) cleanTitle else rawName.substringBeforeLast("."), 0, 0, null, null, ""); d.kind = 1; d.link = url; d.page = page; d.profile = profile; d.ua = uaHint ?: currentWebUa(); d.name = finalName; d.folder = sanitizeFolder(folderPath); d.customName = useCustom; d.expectAudio = expectAudio
               items.add(0, d); dlTab = 0; flyToDownload(); toast("Downloading $finalName"); startRun(d)
@@ -1569,17 +1378,14 @@ jobs:
                 val c = URL(url).openConnection() as HttpURLConnection; c.instanceFollowRedirects = false; c.connectTimeout = 20000; c.readTimeout = 30000
                 c.setRequestProperty("User-Agent", ua ?: MOBILE_UA); c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"); c.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
                 if (referer.isNotEmpty()) c.setRequestProperty("Referer", referer); cookiesFor(profile).getCookie(url)?.let { c.setRequestProperty("Cookie", it) }; if (offset > 0) c.setRequestProperty("Range", "bytes=$offset-")
-                val code = c.responseCode
-                if (code in 300..399) { val loc = c.getHeaderField("Location") ?: throw Exception("Bad redirect"); url = URL(URL(url), loc).toString().replace(" ", "%20"); c.disconnect(); continue }
-                if (code !in 200..299) { c.disconnect(); throw HttpCodeException(code) }
-                return c
+                val code = c.responseCode; if (code in 300..399) { val loc = c.getHeaderField("Location") ?: throw Exception("Bad redirect"); url = URL(URL(url), loc).toString().replace(" ", "%20"); c.disconnect(); continue }
+                if (code !in 200..299) { c.disconnect(); throw HttpCodeException(code) }; return c
               }
               throw Exception("Too many redirects")
             }
 
             private fun audioExtFromMeta(cd: String?, url: String, ct: String): String {
-              val cdName = if (!cd.isNullOrEmpty()) URLUtil.guessFileName(url, cd, null) else ""
-              urlExt(cdName).let { if (it in AUDIO_EXTS) return ".$it" }; urlExt(url).let { if (it in AUDIO_EXTS) return ".$it" }
+              val cdName = if (!cd.isNullOrEmpty()) URLUtil.guessFileName(url, cd, null) else ""; urlExt(cdName).let { if (it in AUDIO_EXTS) return ".$it" }; urlExt(url).let { if (it in AUDIO_EXTS) return ".$it" }
               return when { ct.contains("flac") -> ".flac"; ct.contains("mp4") || ct.contains("aac") || ct.contains("m4a") -> ".m4a"; ct.contains("ogg") -> ".ogg"; ct.contains("wav") -> ".wav"; else -> ".mp3" }
             }
 
@@ -1594,48 +1400,29 @@ jobs:
             @SuppressLint("SetJavaScriptEnabled")
             private fun downloadViaWebView(d: DlItem, g: Int, tmpFile: File): Boolean {
               synchronized(wvDlLock) {
-                if (d.stop != 0 || d.gen != g) return false
-                val linkUri = Uri.parse(d.link); val linkHost = (linkUri.host ?: "").lowercase(Locale.US); val pageUri = if (d.page.isNotEmpty()) Uri.parse(d.page) else null
+                if (d.stop != 0 || d.gen != g) return false; val linkUri = Uri.parse(d.link); val linkHost = (linkUri.host ?: "").lowercase(Locale.US); val pageUri = if (d.page.isNotEmpty()) Uri.parse(d.page) else null
                 val originUrl = if (pageUri != null && linkHost.equals(pageUri.host, ignoreCase = true)) d.page else "${linkUri.scheme ?: "https"}://${linkUri.host ?: ""}/"
                 val token = "${d.id}_$g"; val latch = CountDownLatch(1); if (tmpFile.exists()) tmpFile.delete(); val fos = FileOutputStream(tmpFile, false)
                 wvD = d; wvGen = g; wvToken = token; synchronized(wvFosLock) { wvFos = fos }; wvLatch = latch; wvCompleted = false; wvErr = null; wvDoneBytes = 0L; wvLastAct.set(System.currentTimeMillis()); wvFinished.set(false)
                 val urlLiteral = JSONObject.quote(d.link); val tokLiteral = JSONObject.quote(token)
                 val fetchJs = """(async function(tok){try{var resp=null;for(var tries=0;tries<3;tries++){if(DL.shouldStop(tok)){DL.onFail(tok,'STOPPED');return;}resp=await fetch($urlLiteral,{credentials:'include'});if(resp.ok)break;if((resp.status===409||resp.status===429||resp.status===503)&&tries<2){await new Promise(function(r){setTimeout(r,(tries+1)*2000);});continue;}DL.onFail(tok,'Server returned HTTP '+resp.status);return;}var ct=(resp.headers.get('content-type')||'').toLowerCase();if(ct.indexOf('text/html')>=0){DL.onFail(tok,'Server returned webpage instead of MP3');return;}DL.onMeta(tok,parseInt(resp.headers.get('content-length')||'0',10)||0,ct);function u8ToB64(u8){var s='';for(var i=0;i<u8.length;i+=8192)s+=String.fromCharCode.apply(null,u8.subarray(i,Math.min(i+8192,u8.length)));return btoa(s);}function sendChunks(u8){for(var i=0;i<u8.length;i+=49152){if(DL.shouldStop(tok))return false;DL.onChunk(tok,u8ToB64(u8.subarray(i,Math.min(i+49152,u8.length))));}return true;}if(!resp.body||!resp.body.getReader){if(sendChunks(new Uint8Array(await resp.arrayBuffer())))DL.onDone(tok);else DL.onFail(tok,'STOPPED');return;}var reader=resp.body.getReader(),pending=[],pendingLen=0;function flush(){if(!pendingLen)return true;var m=new Uint8Array(pendingLen),o=0;for(var i=0;i<pending.length;i++){m.set(pending[i],o);o+=pending[i].length;}pending=[];pendingLen=0;return sendChunks(m);}while(true){if(DL.shouldStop(tok)){try{await reader.cancel();}catch(e){}DL.onFail(tok,'STOPPED');return;}var r=await reader.read();if(r.done){if(flush())DL.onDone(tok);else DL.onFail(tok,'STOPPED');return;}pending.push(r.value);pendingLen+=r.value.length;if(pendingLen>=49152&&!flush()){try{await reader.cancel();}catch(e){}DL.onFail(tok,'STOPPED');return;}}}catch(e){DL.onFail(tok,e&&e.message?e.message:'Download failed');}})($tokLiteral);"""
-                fun tryStartFetch(wv: WebView, attempt: Int) {
-                  if (wvFinished.get() || d.stop != 0 || d.gen != g || wvToken != token) return
-                  wv.evaluateJavascript("document.documentElement.outerHTML.slice(0,2500)") { raw ->
-                    if (wvFinished.get() || wvToken != token) return@evaluateJavascript
-                    val snippet = (JSONTokener(raw).nextValue() as? String) ?: ""
-                    if ((snippet.length < 100 || isChallengeHtml(snippet)) && attempt < 6) mainHandler.postDelayed({ tryStartFetch(wv, attempt + 1) }, 1200)
-                    else { wvLastAct.set(System.currentTimeMillis()); wv.evaluateJavascript(fetchJs, null) }
-                  }
-                }
+                fun tryStartFetch(wv: WebView, attempt: Int) { if (wvFinished.get() || d.stop != 0 || d.gen != g || wvToken != token) return; wv.evaluateJavascript("document.documentElement.outerHTML.slice(0,2500)") { raw -> if (wvFinished.get() || wvToken != token) return@evaluateJavascript; val snippet = (JSONTokener(raw).nextValue() as? String) ?: ""; if ((snippet.length < 100 || isChallengeHtml(snippet)) && attempt < 6) mainHandler.postDelayed({ tryStartFetch(wv, attempt + 1) }, 1200) else { wvLastAct.set(System.currentTimeMillis()); wv.evaluateJavascript(fetchJs, null) } } }
                 runOnUiThread {
                   try {
                     if (dlWv != null && dlWvProfile == d.profile && dlWvHost == linkHost) { wvLastAct.set(System.currentTimeMillis()); dlWv!!.evaluateJavascript(fetchJs, null) }
-                    else {
-                      try { dlWv?.destroy() } catch (e: Exception) { }
-                      val wv = WebView(this@MainActivity); dlWv = wv; dlWvProfile = d.profile; dlWvHost = linkHost
-                      if (d.profile.isNotEmpty() && multiProfile) try { WebViewCompat.setProfile(wv, d.profile) } catch (e: Exception) { }
-                      applyWeb(wv); wv.addJavascriptInterface(WvDlBridge(), "DL")
-                      wv.webViewClient = object : WebViewClient() { override fun onPageFinished(view: WebView?, url: String?) { if (!wvFinished.get() && wvToken == token) mainHandler.postDelayed({ if (!wvFinished.get() && wvToken == token && view != null) tryStartFetch(view, 0) }, 300) } }
-                      wv.loadUrl(originUrl)
-                    }
+                    else { try { dlWv?.destroy() } catch (e: Exception) { }; val wv = WebView(this@MainActivity); dlWv = wv; dlWvProfile = d.profile; dlWvHost = linkHost; if (d.profile.isNotEmpty() && multiProfile) try { WebViewCompat.setProfile(wv, d.profile) } catch (e: Exception) { }; applyWeb(wv); wv.addJavascriptInterface(WvDlBridge(), "DL"); wv.webViewClient = object : WebViewClient() { override fun onPageFinished(view: WebView?, url: String?) { if (!wvFinished.get() && wvToken == token) mainHandler.postDelayed({ if (!wvFinished.get() && wvToken == token && view != null) tryStartFetch(view, 0) }, 300) } }; wv.loadUrl(originUrl) }
                   } catch (e: Exception) { if (wvFinished.compareAndSet(false, true)) { wvErr = e.message ?: "WebView init error"; latch.countDown() } }
                 }
                 try { while (!latch.await(1500, TimeUnit.MILLISECONDS)) { if (d.stop != 0 || d.gen != g) break; if (System.currentTimeMillis() - wvLastAct.get() > 35000) { wvErr = "Download timed out"; break } } }
                 finally { wvFinished.set(true); wvToken = ""; synchronized(wvFosLock) { wvFos = null; try { fos.flush() } catch (e: Exception) { }; try { fos.close() } catch (e: Exception) { } } }
-                if (d.stop != 0 || d.gen != g) return false
-                if (!wvCompleted) { if (wvErr?.contains("HTTP 403") == true) dlWvHost = ""; throw Exception(wvErr ?: "Download failed") }
-                try { Thread.sleep(350) } catch (e: Exception) { }; return true
+                if (d.stop != 0 || d.gen != g) return false; if (!wvCompleted) { if (wvErr?.contains("HTTP 403") == true) dlWvHost = ""; throw Exception(wvErr ?: "Download failed") }; try { Thread.sleep(350) } catch (e: Exception) { }; return true
               }
             }
 
             private fun runDirect(d: DlItem, g: Int) {
               if (d.stop != 0 || d.gen != g) return; d.state = 1; ui(); val dir = File(filesDir, "parts/" + d.id)
               try {
-                dir.mkdirs(); val tmpFile = File(dir, "part.bin"); var completed = false
-                val host = (Uri.parse(d.link).host ?: "").lowercase(Locale.US); var useWv = host in wvOnlyHosts
+                dir.mkdirs(); val tmpFile = File(dir, "part.bin"); var completed = false; val host = (Uri.parse(d.link).host ?: "").lowercase(Locale.US); var useWv = host in wvOnlyHosts
                 if (!useWv) {
                   try {
                     var offset = if (tmpFile.exists()) tmpFile.length() else 0L; var conn = openFollow(d.link, d.ua, offset, d.profile, d.page); var ct = (conn.contentType ?: "").lowercase(Locale.US)
@@ -1644,8 +1431,7 @@ jobs:
                       var redir = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")?.substringAfter("url=", "")?.trim('"', '\'', ' ') ?: ""
                       if (redir.isEmpty()) redir = doc.select("a[href], source[src], audio[src]").map { it.absUrl(if (it.hasAttr("href")) "href" else "src") }.firstOrNull { isAudioUrl(it) } ?: ""
                       if (redir.isEmpty()) throw Exception("Server returned webpage instead of MP3")
-                      offset = 0L; conn = openFollow(URL(URL(base), redir).toString(), d.ua, 0L, d.profile, base); ct = (conn.contentType ?: "").lowercase(Locale.US)
-                      if (ct.contains("text/html")) { conn.disconnect(); throw Exception("Server returned webpage instead of MP3") }
+                      offset = 0L; conn = openFollow(URL(URL(base), redir).toString(), d.ua, 0L, d.profile, base); ct = (conn.contentType ?: "").lowercase(Locale.US); if (ct.contains("text/html")) { conn.disconnect(); throw Exception("Server returned webpage instead of MP3") }
                     }
                     if (offset == 0L && d.customName) d.name = sanitizeName(d.title).ifEmpty { "Track" } + audioExtFromMeta(conn.getHeaderField("Content-Disposition"), conn.url.toString(), ct)
                     val append = offset > 0 && conn.responseCode == 206; if (!append) offset = 0L; val len = conn.contentLengthLong; if (len > 0) d.total = offset + len; var done = offset
@@ -1654,38 +1440,20 @@ jobs:
                   } catch (e: HttpCodeException) { if (e.code in WV_FALLBACK_CODES) { if (host.isNotEmpty()) wvOnlyHosts.add(host); useWv = true } else throw e }
                 }
                 if (useWv) completed = downloadViaWebView(d, g, tmpFile)
-                if (completed) {
-                  if (d.gen != g) return; val finalFile = File(dir, sanitizeName(d.name).ifEmpty { "download.bin" }); if (finalFile.exists()) finalFile.delete()
-                  if (!tmpFile.renameTo(finalFile)) { tmpFile.copyTo(finalFile, overwrite = true); tmpFile.delete() }
-                  saveFile(d, finalFile); d.total = finalFile.length(); d.done = d.total; if (!d.customName) d.title = finalFile.nameWithoutExtension; d.state = 2; d.progress = 100
-                  if (d.folder.isEmpty()) runOnUiThread { toast("Downloaded: " + d.title) }
-                } else if (d.gen == g && d.stop == 1) d.state = 4
+                if (completed) { if (d.gen != g) return; val finalFile = File(dir, sanitizeName(d.name).ifEmpty { "download.bin" }); if (finalFile.exists()) finalFile.delete(); if (!tmpFile.renameTo(finalFile)) { tmpFile.copyTo(finalFile, overwrite = true); tmpFile.delete() }; saveFile(d, finalFile); d.total = finalFile.length(); d.done = d.total; if (!d.customName) d.title = finalFile.nameWithoutExtension; d.state = 2; d.progress = 100; if (d.folder.isEmpty()) runOnUiThread { toast("Downloaded: " + d.title) } } else if (d.gen == g && d.stop == 1) d.state = 4
               } catch (e: Exception) { if (d.gen == g) { if (d.stop == 1) d.state = 4 else if (d.stop != 2) { d.state = 3; d.msg = (e.message ?: "Unknown error").take(300) } } }
               finally { if (d.state == 2 || d.stop == 2) dir.deleteRecursively(); runOnUiThread { finishItem(d) } }
             }
 
             private fun openFile(d: DlItem) { try { startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(Uri.parse(d.uri), d.mime ?: "*/*"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }) } catch (e: Exception) { toast("No app found to open this file") } }
-
-            private fun snapshotJson(): String {
-              val a = JSONArray()
-              for (d in items) a.put(JSONObject().put("t", d.title).put("s", if (d.state == 0 || d.state == 1) 4 else d.state).put("u", d.uri ?: "").put("m", d.mime ?: "").put("g", d.msg).put("n", d.name).put("i", d.id).put("k", d.kind).put("l", d.link).put("p", d.page).put("a", d.audio).put("f", d.fmt).put("ua", d.ua ?: "").put("z", d.total).put("d", d.done).put("r", d.progress).put("v", d.vid).put("q", d.qkey).put("tg", d.qtag).put("pf", d.profile).put("fd", d.folder).put("cn", d.customName).put("ea", d.expectAudio))
-              return a.toString()
-            }
-
+            private fun snapshotJson(): String { val a = JSONArray(); for (d in items) a.put(JSONObject().put("t", d.title).put("s", if (d.state == 0 || d.state == 1) 4 else d.state).put("u", d.uri ?: "").put("m", d.mime ?: "").put("g", d.msg).put("n", d.name).put("i", d.id).put("k", d.kind).put("l", d.link).put("p", d.page).put("a", d.audio).put("f", d.fmt).put("ua", d.ua ?: "").put("z", d.total).put("d", d.done).put("r", d.progress).put("v", d.vid).put("q", d.qkey).put("tg", d.qtag).put("pf", d.profile).put("fd", d.folder).put("cn", d.customName).put("ea", d.expectAudio)); return a.toString() }
             private fun saveItemsAsync() { val json = try { snapshotJson() } catch (e: Exception) { return }; saveExec.execute { try { val tmp = File(filesDir, "dl.json.tmp"); tmp.writeText(json, Charsets.UTF_8); tmp.renameTo(File(filesDir, "dl.json")) } catch (e: Exception) { } } }
             private fun scheduleSaveItems() { if (savePending.compareAndSet(false, true)) mainHandler.postDelayed({ savePending.set(false); saveItemsAsync() }, 2500) }
 
             private fun loadItems() {
               try {
                 val f = File(filesDir, "dl.json"); val a = JSONArray(if (f.exists()) f.readText(Charsets.UTF_8) else prefs.getString("dl", "[]"))
-                for (i in 0 until a.length()) {
-                  val o = a.getJSONObject(i); var st = o.getInt("s"); if (st == 0 || st == 1) st = 4
-                  val it2 = DlItem(o.getString("t"), st, o.optInt("r", 100), o.optString("u"), o.optString("m"), o.optString("g"))
-                  it2.name = o.optString("n"); val id = o.optString("i"); if (id.isNotEmpty()) it2.id = id; it2.kind = o.optInt("k", 0); it2.link = o.optString("l"); it2.page = o.optString("p")
-                  it2.audio = o.optBoolean("a", false); it2.fmt = o.optString("f", "bv*+ba/b"); val ua = o.optString("ua"); it2.ua = if (ua.isEmpty()) null else ua; it2.total = o.optLong("z", 0L)
-                  it2.done = o.optLong("d", 0L); it2.vid = o.optString("v"); it2.qkey = o.optString("q"); it2.qtag = o.optString("tg"); it2.profile = o.optString("pf"); it2.folder = o.optString("fd")
-                  it2.customName = o.optBoolean("cn", false); it2.expectAudio = o.optBoolean("ea", false); items.add(it2)
-                }
+                for (i in 0 until a.length()) { val o = a.getJSONObject(i); var st = o.getInt("s"); if (st == 0 || st == 1) st = 4; val it2 = DlItem(o.getString("t"), st, o.optInt("r", 100), o.optString("u"), o.optString("m"), o.optString("g")); it2.name = o.optString("n"); val id = o.optString("i"); if (id.isNotEmpty()) it2.id = id; it2.kind = o.optInt("k", 0); it2.link = o.optString("l"); it2.page = o.optString("p"); it2.audio = o.optBoolean("a", false); it2.fmt = o.optString("f", "bv*+ba/b"); val ua = o.optString("ua"); it2.ua = if (ua.isEmpty()) null else ua; it2.total = o.optLong("z", 0L); it2.done = o.optLong("d", 0L); it2.vid = o.optString("v"); it2.qkey = o.optString("q"); it2.qtag = o.optString("tg"); it2.profile = o.optString("pf"); it2.folder = o.optString("fd"); it2.customName = o.optBoolean("cn", false); it2.expectAudio = o.optBoolean("ea", false); items.add(it2) }
               } catch (e: Exception) { }
             }
 
@@ -1700,12 +1468,8 @@ jobs:
                 val d = shownCache[position]; val box: LinearLayout; val h: DlHolder
                 if (convertView == null) {
                   box = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(8)) }
-                  val t = TextView(this@MainActivity).apply { textSize = 16f; maxLines = 2 }; val s = TextView(this@MainActivity).apply { textSize = 13f }
-                  val pb = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
-                  val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-                  val btnAct = act("") { }; val btnOpen = act("Open page") { }; val btnDel = act("Delete", 0xFFE5534B.toInt()) { }
-                  row.addView(btnAct); row.addView(btnOpen); row.addView(btnDel); box.addView(t); box.addView(s); box.addView(pb); box.addView(row)
-                  h = DlHolder(t, s, pb, btnAct, btnOpen, btnDel); box.tag = h
+                  val t = TextView(this@MainActivity).apply { textSize = 16f; maxLines = 2 }; val s = TextView(this@MainActivity).apply { textSize = 13f }; val pb = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }; val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                  val btnAct = act("") { }; val btnOpen = act("Open page") { }; val btnDel = act("Delete", 0xFFE5534B.toInt()) { }; row.addView(btnAct); row.addView(btnOpen); row.addView(btnDel); box.addView(t); box.addView(s); box.addView(pb); box.addView(row); h = DlHolder(t, s, pb, btnAct, btnOpen, btnDel); box.tag = h
                 } else { box = convertView as LinearLayout; h = box.tag as DlHolder }
                 h.title.setTextColor(col.text); h.title.text = d.title; h.sub.setTextColor(col.sec); h.sub.text = (if (d.folder.isNotEmpty()) d.folder + "\n" else "") + statusText(d)
                 if (d.state == 0 || d.state == 1 || d.state == 4) { h.pb.visibility = View.VISIBLE; h.pb.progress = d.progress } else h.pb.visibility = View.GONE
@@ -1722,30 +1486,10 @@ jobs:
           EOF_FILE
           mkdir -p app/src/main/res/drawable
           cat > app/src/main/res/drawable/ic_launcher_foreground.xml <<'EOF_FILE'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-          <path android:fillColor="#1F5FBF" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M32,38C36,32 44,32 46,38C48,44 42,48 44,54C40,58 34,54 32,48z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M60,36C66,32 76,36 76,44C76,50 70,52 68,58C64,56 62,50 60,46z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M44,68C50,64 58,66 62,72C58,78 50,80 44,74z"/>
-          <path android:strokeColor="#66FFFFFF" android:strokeWidth="0.8" android:pathData="M54,22C40,34 40,74 54,86C68,74 68,34 54,22M22,54H86M27,40H81M27,68H81"/>
-          <path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
-          <path android:strokeColor="#0A2A5C" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
-          <path android:strokeColor="#FFFFFF" android:strokeWidth="4.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
-          </vector>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#1F5FBF" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/><path android:fillColor="#3DA24A" android:pathData="M32,38C36,32 44,32 46,38C48,44 42,48 44,54C40,58 34,54 32,48z"/><path android:fillColor="#3DA24A" android:pathData="M60,36C66,32 76,36 76,44C76,50 70,52 68,58C64,56 62,50 60,46z"/><path android:fillColor="#3DA24A" android:pathData="M44,68C50,64 58,66 62,72C58,78 50,80 44,74z"/><path android:strokeColor="#66FFFFFF" android:strokeWidth="0.8" android:pathData="M54,22C40,34 40,74 54,86C68,74 68,34 54,22M22,54H86M27,40H81M27,68H81"/><path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/><path android:strokeColor="#0A2A5C" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/><path android:strokeColor="#FFFFFF" android:strokeWidth="4.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/></vector>
           EOF_FILE
           cat > app/src/main/res/drawable/ic_logo.xml <<'EOF_FILE'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="150dp" android:height="150dp" android:viewportWidth="64" android:viewportHeight="64">
-          <group android:translateX="-22" android:translateY="-22">
-          <path android:fillColor="#1F5FBF" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M32,38C36,32 44,32 46,38C48,44 42,48 44,54C40,58 34,54 32,48z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M60,36C66,32 76,36 76,44C76,50 70,52 68,58C64,56 62,50 60,46z"/>
-          <path android:fillColor="#3DA24A" android:pathData="M44,68C50,64 58,66 62,72C58,78 50,80 44,74z"/>
-          <path android:strokeColor="#66FFFFFF" android:strokeWidth="0.8" android:pathData="M54,22C40,34 40,74 54,86C68,74 68,34 54,22M22,54H86M27,40H81M27,68H81"/>
-          <path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/>
-          <path android:strokeColor="#0A2A5C" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
-          <path android:strokeColor="#FFFFFF" android:strokeWidth="4.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/>
-          </group>
-          </vector>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="150dp" android:height="150dp" android:viewportWidth="64" android:viewportHeight="64"><group android:translateX="-22" android:translateY="-22"><path android:fillColor="#1F5FBF" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/><path android:fillColor="#3DA24A" android:pathData="M32,38C36,32 44,32 46,38C48,44 42,48 44,54C40,58 34,54 32,48z"/><path android:fillColor="#3DA24A" android:pathData="M60,36C66,32 76,36 76,44C76,50 70,52 68,58C64,56 62,50 60,46z"/><path android:fillColor="#3DA24A" android:pathData="M44,68C50,64 58,66 62,72C58,78 50,80 44,74z"/><path android:strokeColor="#66FFFFFF" android:strokeWidth="0.8" android:pathData="M54,22C40,34 40,74 54,86C68,74 68,34 54,22M22,54H86M27,40H81M27,68H81"/><path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:pathData="M22,54a32,32 0 1,0 64,0a32,32 0 1,0 -64,0z"/><path android:strokeColor="#0A2A5C" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/><path android:strokeColor="#FFFFFF" android:strokeWidth="4.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M30,64L36,44L42,64M32.5,57H39.5M48,44V64M48,44H53C58.5,44 58.5,53.5 53,53.5H48M48,53.5H54C60,53.5 60,64 54,64H48M66,44V64M78,44V64M66,54H78"/></group></vector>
           EOF_FILE
           mkdir -p app/src/main/res/values
           cat > app/src/main/res/values/colors.xml <<'EOF_FILE'
@@ -1755,10 +1499,7 @@ jobs:
           mkdir -p app/src/main/res/mipmap-anydpi-v26
           cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF_FILE'
           <?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-            <background android:drawable="@color/ic_bg"/>
-            <foreground android:drawable="@drawable/ic_launcher_foreground"/>
-          </adaptive-icon>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/ic_bg"/><foreground android:drawable="@drawable/ic_launcher_foreground"/></adaptive-icon>
           EOF_FILE
 
       - name: Build debug APK
