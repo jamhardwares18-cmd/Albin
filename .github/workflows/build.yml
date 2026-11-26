@@ -534,7 +534,9 @@ jobs:
              if (ex != null && ex.startsWith("http") && (t == WebView.HitTestResult.SRC_ANCHOR_TYPE || t == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE || t == WebView.HitTestResult.IMAGE_TYPE)) {
               if (isYt(ex)) vid = ytId(ex); if (vid.isEmpty()) vid = Regex("/(?:vi|vi_webp|an_webp)/([A-Za-z0-9_-]{11})/").find(ex)?.groupValues?.get(1) ?: ""
              }
-             if (vid.isNotEmpty()) { longPressVideo("https://www.youtube.com/watch?v=" + vid); true }
+             val exs = ex ?: ""; val plId = if (exs.startsWith("http") && isYt(exs)) ytListId(exs) else ""
+             if (plId.isNotEmpty()) { if (ytId(exs).isEmpty()) longPressPlaylist(exs) else askVideoOrPlaylist(exs); true }
+             else if (vid.isNotEmpty()) { longPressVideo("https://www.youtube.com/watch?v=" + vid); true }
              else {
               val infoJs = "(function(){var as=document.querySelectorAll('a[href]');var ls=[];for(var i=0;i<as.length;i++){var h=as[i].href;if(h&&h.indexOf('http')===0)ls.push(h.split('#')[0]);}return JSON.stringify({t:window.__abhLastText||'',u:window.__abhLastUrl||'',links:ls});})();"
               val pageUrl = w.url ?: ""; val webUa = w.settings.userAgentString ?: MOBILE_UA; val hitUrl = if (ex != null && (ex.startsWith("http://") || ex.startsWith("https://"))) ex else ""
@@ -1109,11 +1111,64 @@ jobs:
            private fun normalUrl(link: String): String { val id = ytId(link); return if (id.isEmpty()) link else "https://www.youtube.com/watch?v=" + id }
            private fun fileExists(d: DlItem) = (d.uri ?: "").let { if (it.isEmpty()) false else try { contentResolver.openAssetFileDescriptor(Uri.parse(it), "r")?.use { true } ?: false } catch (e: Exception) { false } }
            private fun qStatus(vid: String, key: String): Int { for (d in items) if (d.kind == 0 && d.vid == vid && d.qkey == key) { if (d.state == 2) { if (fileExists(d)) return 2 } else if (d.state != 3) return 1 }; return 0 }
-           private fun askDownload() { val t = tabs[cur]; val page = if (t.home) null else t.web.url; if (page == null) { toast("Open a video page first"); return }; if (!ready) { toast("Downloader is starting, try again in a moment"); return }; if (isYt(page) && ytId(page).isEmpty()) { toast("Open a video first, then tap download"); return }; longPressVideo(page, t.web.title ?: "Video") }
+           private fun askDownload() { val t = tabs[cur]; val page = if (t.home) null else t.web.url; if (page == null) { toast("Open a video page first"); return }; if (!ready) { toast("Downloader is starting, try again in a moment"); return }; if (isYt(page) && ytListId(page).isNotEmpty()) { if (ytId(page).isEmpty()) longPressPlaylist(page) else askVideoOrPlaylist(page); return }; if (isYt(page) && ytId(page).isEmpty()) { toast("Open a video first, then tap download"); return }; longPressVideo(page, t.web.title ?: "Video") }
            private fun standardQualities(): List<Q> { val list = mutableListOf<Q>(); list.add(Q("Original quality (best)", "bv*+ba/b", false, 0L, "best", "")); for (h in listOf(2160, 1440, 1080, 720, 480, 360, 240, 144)) list.add(Q("${h}p (or the closest lower)", "bv*[height<=$h]+ba/b[height<=$h]", false, 0L, "h$h", "auto")); list.add(Q("Audio only (MP3)", "", true, 0L, "mp3", "audio")); return list }
            private fun showQualities(link: String, page: String, title: String, qs: List<Q>) { val vid = vidOf(link); val labels = qs.map { when (qStatus(vid, it.key)) { 2 -> "\u2714\u2714 ${it.label}  (downloaded)"; 1 -> "${it.label}  (downloading...)"; else -> it.label } }.toTypedArray(); dlg().setTitle("Choose quality").setItems(labels) { _, i -> val q = qs[i]; when (qStatus(vid, q.key)) { 2 -> toast("Already downloaded in this quality"); 1 -> toast("This quality is already downloading"); else -> enqueue(link, page, title, q) } }.show() }
            private fun longPressVideo(url: String, title: String = "Video") { if (!ready) { toast("Downloader is starting, try again in a moment"); return }; val link = normalUrl(url); val ck = cookieText(link, tabs.getOrNull(cur)?.profile ?: ""); val wait = dlg().setTitle("Please wait").setMessage("Checking this video's qualities...").setCancelable(true).setOnCancelListener { try { YoutubeDL.getInstance().destroyProcessById(qPid) } catch (e: Exception) { } }.show(); Thread { var err = ""; val res: List<Q> = try { fetchQualities(link, ck) } catch (e: Exception) { err = e.message ?: ""; emptyList() }; runOnUiThread { if (!wait.isShowing) return@runOnUiThread; wait.dismiss(); if (res.isNotEmpty()) showQualities(link, url, title, res) else dlg().setTitle("Could not read qualities").setMessage(if (err.isEmpty()) "The downloader could not read this video's quality list." else err.take(500)).setPositiveButton("Standard list") { _, _ -> showQualities(link, url, title, standardQualities()) }.setNegativeButton("Cancel", null).show() } }.start() }
 
+           private fun ytListId(link: String): String { if (!isYt(link)) return ""; return try { Uri.parse(link).getQueryParameter("list") ?: "" } catch (e: Exception) { "" } }
+           private fun playlistUrl(listId: String) = "https://www.youtube.com/playlist?list=" + listId
+           private fun askVideoOrPlaylist(url: String) {
+            dlg().setTitle("Download").setItems(arrayOf("This video only", "Whole playlist")) { _, i -> if (i == 0) longPressVideo(url, tabs.getOrNull(cur)?.web?.title ?: "Video") else longPressPlaylist(url) }.setNegativeButton("Cancel", null).show()
+           }
+           private fun longPressPlaylist(url: String) {
+            if (!ready) { toast("Downloader is starting, try again in a moment"); return }
+            val listId = ytListId(url); if (listId.isEmpty()) { toast("No playlist found in this link"); return }
+            val link = playlistUrl(listId); val profile = tabs.getOrNull(cur)?.profile ?: ""; val ck = cookieText(link, profile)
+            val wait = dlg().setTitle("Please wait").setMessage("Reading playlist...").setCancelable(true).setOnCancelListener { try { YoutubeDL.getInstance().destroyProcessById(qPid) } catch (e: Exception) { } }.show()
+            Thread {
+             var err = ""; var pl: Pair<String, List<FoundLink>>? = null
+             try { pl = fetchPlaylist(link, ck) } catch (e: Exception) { err = e.message ?: "" }
+             runOnUiThread {
+              if (!wait.isShowing) return@runOnUiThread; wait.dismiss()
+              val res = pl
+              if (res == null || res.second.isEmpty()) dlg().setTitle("Could not read playlist").setMessage(if (err.isEmpty()) "No videos found. The playlist may be private." else err.take(500)).setPositiveButton("OK", null).show()
+              else showPlaylistQualities(res.first, res.second, link, profile)
+             }
+            }.start()
+           }
+           private fun fetchPlaylist(link: String, cookies: String?): Pair<String, List<FoundLink>> {
+            val cf = File(cacheDir, "cookies_pl.txt"); val pid = "pl" + System.nanoTime(); qPid = pid; val finished = AtomicBoolean(false)
+            Thread { try { Thread.sleep(120000) } catch (e: Exception) { }; if (!finished.get()) try { YoutubeDL.getInstance().destroyProcessById(pid) } catch (e: Exception) { } }.start()
+            try {
+             val req = YoutubeDLRequest(link); req.addOption("--flat-playlist"); req.addOption("--dump-single-json"); req.addOption("--yes-playlist"); if (cookies != null) { cf.writeText(cookies); req.addOption("--cookies", cf.absolutePath) }
+             val jsonLine = YoutubeDL.getInstance().execute(req, pid).out.lines().lastOrNull { it.trimStart().startsWith("{") } ?: throw Exception("Could not read playlist")
+             fun str(o: JSONObject, k: String): String = if (o.isNull(k)) "" else o.optString(k, "")
+             val root = JSONObject(jsonLine); val title = sanitizeName(str(root, "title")).ifEmpty { "Playlist" }; val arr = root.optJSONArray("entries") ?: throw Exception("No videos found")
+             val list = mutableListOf<FoundLink>(); val seen = HashSet<String>()
+             for (i in 0 until arr.length()) {
+              val e = arr.optJSONObject(i) ?: continue; var id = str(e, "id"); if (id.length != 11) id = ytId(str(e, "url")); if (id.length != 11 || !seen.add(id)) continue
+              val t = str(e, "title"); if (t.startsWith("[Private") || t.startsWith("[Deleted")) continue
+              list.add(FoundLink("https://www.youtube.com/watch?v=" + id, sanitizeName(t).ifEmpty { id }))
+             }
+             return title to list
+            } finally { finished.set(true); cf.delete() }
+           }
+           private fun showPlaylistQualities(title: String, vids: List<FoundLink>, page: String, profile: String) {
+            val qs = standardQualities(); val labels = qs.map { it.label }.toTypedArray()
+            dlg().setTitle("$title (${vids.size} videos)").setItems(labels) { _, i -> enqueuePlaylist(title, vids, qs[i], page, profile) }.setNegativeButton("Cancel", null).show()
+           }
+           private fun enqueuePlaylist(title: String, vids: List<FoundLink>, q: Q, page: String, profile: String) {
+            val folder = sanitizeFolder(title); val toRun = mutableListOf<DlItem>(); var skipped = 0
+            for (v in vids) {
+             val vid = vidOf(v.url); if (qStatus(vid, q.key) != 0) { skipped++; continue }
+             val d = DlItem(v.name, 0, 0, null, null, ""); d.kind = 0; d.link = v.url; d.page = page; d.audio = q.audio; d.fmt = q.fmt; d.vid = vid; d.qkey = q.key; d.qtag = q.tag; d.profile = profile; d.folder = folder
+             toRun.add(d)
+            }
+            if (toRun.isEmpty()) { toast("All videos are already downloaded or downloading"); return }
+            items.addAll(0, toRun); dlTab = 0; flyToDownload(); toast("Added ${toRun.size} videos to Downloads" + (if (skipped > 0) " ($skipped skipped)" else "")); scheduleSaveItems()
+            for (d in toRun) startRun(d)
+           }
            private fun fetchQualities(link: String, cookies: String?): List<Q> {
             val cf = File(cacheDir, "cookies_q.txt"); val pid = "q" + System.nanoTime(); qPid = pid; val finished = AtomicBoolean(false)
             Thread { try { Thread.sleep(30000) } catch (e: Exception) { }; if (!finished.get()) try { YoutubeDL.getInstance().destroyProcessById(pid) } catch (e: Exception) { } }.start()
@@ -1148,7 +1203,7 @@ jobs:
              if (d.audio) { req.addOption("-x"); req.addOption("--audio-format", "mp3"); req.addOption("--audio-quality", "0") } else { req.addOption("-f", d.fmt); req.addOption("-S", "res,ext:mp4:m4a"); req.addOption("--merge-output-format", "mp4") }
              YoutubeDL.getInstance().execute(req, d.id) { p, _, line -> if (d.gen == g) { if (p >= 0f) d.progress = p.toInt().coerceIn(0, 100); val m = SIZE_RE.find(line); if (m != null) d.sizeLabel = m.groupValues[2]; ui() } }
              val f = (dir.listFiles() ?: emptyArray()).filter { !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.contains(".part-") }.maxByOrNull { it.length() } ?: throw Exception("No file was downloaded")
-             if (d.gen != g) return; d.title = f.nameWithoutExtension; saveFile(d, f); d.total = f.length(); d.state = 2; d.progress = 100; runOnUiThread { toast("Downloaded: " + d.title) }
+             if (d.gen != g) return; d.title = f.nameWithoutExtension; saveFile(d, f); d.total = f.length(); d.state = 2; d.progress = 100; if (d.folder.isEmpty()) runOnUiThread { toast("Downloaded: " + d.title) }
             } catch (e: Exception) { if (d.gen == g) { if (d.stop == 1) d.state = 4 else if (d.stop != 2) { d.state = 3; d.msg = (e.message ?: "Unknown error").take(700) } } }
             finally { if (d.state == 2 || d.stop == 2) dir.deleteRecursively(); cf.delete(); runOnUiThread { finishItem(d) } }
            }
