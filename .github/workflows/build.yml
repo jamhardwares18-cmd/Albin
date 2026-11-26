@@ -333,6 +333,7 @@ jobs:
           val LIGHT = Pal(0xFFFFFFFF.toInt(), 0xFFECEDF1.toInt(), 0xFFF1F3F4.toInt(), 0xFF1B1B1F.toInt(), 0xFF5F6368.toInt(), 0xFF7A7A80.toInt())
           const val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
           const val MOBILE_UA = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+          const val DESK_JS = """(function(){if(navigator.userAgent.indexOf('X11; Linux x86_64')<0)return;function fix(){var h=document.head||document.documentElement;if(!h)return;var ms=document.querySelectorAll('meta[name=viewport]');var m=ms[0];if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');h.appendChild(m);}for(var i=1;i<ms.length;i++){ms[i].parentNode.removeChild(ms[i]);}if(m.getAttribute('content')!=='width=1024')m.setAttribute('content','width=1024');}fix();new MutationObserver(fix).observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['content','name']});})();"""
           const val REQ_PERM = 76; const val REQ_FILE = 77; const val REQ_TREE = 78; const val REQ_GH_TREE = 79; const val REQ_ALL_FILES = 80; const val REQ_WEB_TREE = 81
           class HttpCodeException(val code: Int) : Exception("Server returned HTTP $code")
           class UploadEntry(val relPath: String, val size: Long, val file: File?, val uri: Uri?)
@@ -373,7 +374,7 @@ jobs:
            @Volatile private var wvLatch: CountDownLatch? = null; @Volatile private var wvCompleted = false; @Volatile private var wvErr: String? = null
            @Volatile private var wvDoneBytes = 0L; private val wvLastAct = AtomicLong(0L); private val wvFinished = AtomicBoolean(true)
            private var customView: View? = null; private var customCb: WebChromeClient.CustomViewCallback? = null; private var fileCb: ValueCallback<Array<Uri>>? = null
-           private val exec = Executors.newSingleThreadExecutor(); private val directExec = Executors.newFixedThreadPool(3); private val saveExec = Executors.newSingleThreadExecutor()
+           private val exec = Executors.newFixedThreadPool(3); private val directExec = Executors.newFixedThreadPool(4); private val saveExec = Executors.newSingleThreadExecutor()
            private val mainHandler = Handler(Looper.getMainLooper()); private val prefs by lazy { getSharedPreferences("s", MODE_PRIVATE) }
            private lateinit var topBar: View; private lateinit var bottomBar: View; private lateinit var urlBox: EditText; private lateinit var homeSearch: EditText
            private lateinit var content: FrameLayout; private lateinit var home: View; private lateinit var tabCount: TextView; private lateinit var fab: View
@@ -516,7 +517,7 @@ jobs:
            private fun newTab(profile: String? = null) {
             val w = WebView(this); var pname = profile ?: (if (multiProfile) "t" + System.currentTimeMillis() + tabs.size else "")
             if (pname.isNotEmpty()) { if (multiProfile) try { WebViewCompat.setProfile(w, pname) } catch (e: Exception) { pname = "" } else pname = "" }
-            val pf = pname; applyWeb(w); w.addJavascriptInterface(JsBridge(pf), "ABH"); var touchLastY = 0f; var scrollAcc = 0f
+            val pf = pname; applyWeb(w); w.addJavascriptInterface(JsBridge(pf), "ABH"); try { if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) WebViewCompat.addDocumentStartJavaScript(w, DESK_JS, setOf("*")) } catch (e: Throwable) { }; var touchLastY = 0f; var scrollAcc = 0f
             w.setOnTouchListener { _, ev ->
              if (ev.pointerCount > 1) { scrollAcc = 0f; return@setOnTouchListener false }
              when (ev.actionMasked) {
@@ -552,7 +553,7 @@ jobs:
             w.webViewClient = object : WebViewClient() {
              override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean { val u = request?.url?.toString() ?: return false; if (isAudioUrl(u)) { val th = if (System.currentTimeMillis() - pendingClickTime < 5000) pendingClickName else ""; startDirectNamed(u, th, view?.url ?: u, pf, "", true, view?.settings?.userAgentString ?: currentWebUa()); return true }; return false }
              override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) { if (view != null && tabs.getOrNull(cur)?.web == view && url != null) urlBox.setText(url); forceDesktopViewport(view); injectSiteHelper(view) }
-             override fun onPageCommitVisible(view: WebView?, url: String?) { forceDesktopViewport(view); injectSiteHelper(view) }
+             override fun onPageCommitVisible(view: WebView?, url: String?) { if (desktop && view != null) applyWeb(view); forceDesktopViewport(view); injectSiteHelper(view) }
              override fun onPageFinished(view: WebView?, url: String?) { forceDesktopViewport(view); injectSiteHelper(view) }
             }
             w.webChromeClient = object : WebChromeClient() {
@@ -1199,7 +1200,7 @@ jobs:
             if (d.stop != 0 || d.gen != g) return; d.state = 1; ui(); val dir = File(filesDir, "parts/" + d.id); val cf = File(cacheDir, "cookies" + d.id + ".txt")
             try {
              dir.mkdirs(); val req = YoutubeDLRequest(d.link); val tag = if (d.qtag.isEmpty() || d.qtag == "audio") "" else if (d.qtag == "auto") " [%(height)sp]" else " [${d.qtag}]"
-             req.addOption("-o", dir.absolutePath + "/%(title).80s$tag.%(ext)s"); req.addOption("--no-playlist"); if (cookies != null) { cf.writeText(cookies); req.addOption("--cookies", cf.absolutePath) }
+             req.addOption("-o", dir.absolutePath + "/%(title).80s$tag.%(ext)s"); req.addOption("--no-playlist"); req.addOption("-N", "4"); if (cookies != null) { cf.writeText(cookies); req.addOption("--cookies", cf.absolutePath) }
              if (d.audio) { req.addOption("-x"); req.addOption("--audio-format", "mp3"); req.addOption("--audio-quality", "0") } else { req.addOption("-f", d.fmt); req.addOption("-S", "res,ext:mp4:m4a"); req.addOption("--merge-output-format", "mp4") }
              YoutubeDL.getInstance().execute(req, d.id) { p, _, line -> if (d.gen == g) { if (p >= 0f) d.progress = p.toInt().coerceIn(0, 100); val m = SIZE_RE.find(line); if (m != null) d.sizeLabel = m.groupValues[2]; ui() } }
              val f = (dir.listFiles() ?: emptyArray()).filter { !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.contains(".part-") }.maxByOrNull { it.length() } ?: throw Exception("No file was downloaded")
@@ -1330,7 +1331,7 @@ jobs:
                }
                if (offset == 0L && d.customName) d.name = sanitizeName(d.title).ifEmpty { "Track" } + audioExtFromMeta(conn.getHeaderField("Content-Disposition"), conn.url.toString(), ct)
                val append = offset > 0 && conn.responseCode == 206; if (!append) offset = 0L; val len = conn.contentLengthLong; if (len > 0) d.total = offset + len; var done = offset
-               conn.inputStream.use { ins -> FileOutputStream(tmpFile, append).use { out -> val buf = ByteArray(65536); while (true) { val n = ins.read(buf); if (n < 0) { completed = true; break }; if (d.stop != 0 || d.gen != g) break; out.write(buf, 0, n); done += n; d.done = done; if (d.total > 0) d.progress = (done * 100 / d.total).toInt().coerceIn(0, 100); ui() } } }
+               conn.inputStream.use { ins -> FileOutputStream(tmpFile, append).use { out -> val buf = ByteArray(262144); while (true) { val n = ins.read(buf); if (n < 0) { completed = true; break }; if (d.stop != 0 || d.gen != g) break; out.write(buf, 0, n); done += n; d.done = done; if (d.total > 0) d.progress = (done * 100 / d.total).toInt().coerceIn(0, 100); ui() } } }
                conn.disconnect()
               } catch (e: HttpCodeException) { if (e.code in WV_FALLBACK_CODES) { if (host.isNotEmpty()) wvOnlyHosts.add(host); useWv = true } else throw e }
              }
