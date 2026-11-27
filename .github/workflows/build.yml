@@ -88,7 +88,7 @@ jobs:
           plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
           android {
             namespace = "com.example.ytdl"; compileSdk = 34
-            defaultConfig { applicationId = "com.abh.browser"; minSdk = 29; targetSdk = 34; versionCode = (project.findProperty("vCode") as String?)?.toIntOrNull() ?: 1; versionName = "3.3"; ndk { abiFilters += listOf("arm64-v8a") } }
+            defaultConfig { applicationId = "com.abh.browser"; minSdk = 29; targetSdk = 34; versionCode = (project.findProperty("vCode") as String?)?.toIntOrNull() ?: 1; versionName = "3.4"; ndk { abiFilters += listOf("arm64-v8a") } }
             signingConfigs { create("abh") { storeFile = rootProject.file("abh.keystore"); storePassword = "abhbrowser"; keyAlias = "abh"; keyPassword = "abhbrowser" } }
             buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("abh") } }
             compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -237,7 +237,7 @@ jobs:
                 <LinearLayout android:id="@+id/rowMaxDl" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Simultaneous downloads" android:textSize="17sp"/><TextView android:id="@+id/maxDlVal" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="3" android:textSize="13sp"/></LinearLayout>
                 <LinearLayout android:id="@+id/rowBattery" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Keep downloading in background" android:textSize="17sp"/><TextView android:id="@+id/batteryVal" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="" android:textSize="13sp"/></LinearLayout>
                 <LinearLayout android:id="@+id/rowUpdate" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Update downloader engine" android:textSize="17sp"/><TextView android:id="@+id/v2" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="Run this if downloads fail" android:textSize="13sp"/></LinearLayout>
-                <LinearLayout android:id="@+id/rowAbout" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="abh browser" android:textSize="17sp"/><TextView android:id="@+id/v3" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="Version 3.3" android:textSize="13sp"/></LinearLayout>
+                <LinearLayout android:id="@+id/rowAbout" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="abh browser" android:textSize="17sp"/><TextView android:id="@+id/v3" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="Version 3.4 (tap for page info)" android:textSize="13sp"/></LinearLayout>
               </LinearLayout></ScrollView>
             </LinearLayout>
             <LinearLayout android:id="@+id/tabsPage" android:tag="bg" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:clickable="true" android:visibility="gone">
@@ -386,6 +386,14 @@ jobs:
            override fun onDestroy() { try { wl?.release() } catch (e: Exception) { }; wl = null; super.onDestroy() }
           }
           
+          class DeskWebView(c: android.content.Context) : WebView(c) {
+           @Volatile var fullVisible = false
+           override fun getGlobalVisibleRect(r: android.graphics.Rect?, globalOffset: android.graphics.Point?): Boolean {
+            val ok = super.getGlobalVisibleRect(r, globalOffset)
+            if (ok && fullVisible && r != null) { r.right = r.left + width; r.bottom = r.top + height }
+            return ok
+           }
+          }
           class MainActivity : Activity() {
            private val tabs = mutableListOf<Tab>(); private val items = mutableListOf<DlItem>(); private var shownCache: List<DlItem> = emptyList()
            private var cur = 0; private var dlTab = 0; @Volatile private var qPid = ""; private var ready = false
@@ -439,6 +447,7 @@ jobs:
             click(R.id.rowTheme) { dlg().setTitle("Theme").setSingleChoiceItems(arrayOf("Auto (follow system)", "Light (day)", "Dark (night)"), theme) { d, i -> theme = i; prefs.edit().putInt("theme", i).apply(); d.dismiss(); applyTheme() }.show() }
             click(R.id.rowOrientation) { dlg().setTitle("Screen orientation").setSingleChoiceItems(arrayOf("Auto (follow phone)", "Landscape", "Portrait"), orient) { d, i -> orient = i; prefs.edit().putInt("orient", i).apply(); d.dismiss(); applyOrientation() }.show() }
             click(R.id.rowDesktop) { toggleDesktop() }; click(R.id.rowCookies) { cookiesOn = !cookiesOn; prefs.edit().putBoolean("cookies", cookiesOn).apply(); updateSettingsUi() }
+            click(R.id.rowAbout) { debugInfo() }
             click(R.id.rowMaxDl) { val c0 = prefs.getInt("maxdl", 3).coerceIn(1, 10); dlg().setTitle("Simultaneous downloads").setSingleChoiceItems(Array(10) { (it + 1).toString() }, c0 - 1) { d, i -> prefs.edit().putInt("maxdl", i + 1).apply(); applyMaxDl(); d.dismiss(); updateSettingsUi(); toast("${i + 1} downloads at a time") }.show() }
             click(R.id.rowBattery) { try { val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager; if (pm.isIgnoringBatteryOptimizations(packageName)) toast("Already allowed") else startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) } catch (e: Exception) { try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (e2: Exception) { toast("Open phone Settings > Battery") } } }
             click(R.id.rowUpdate) { toast("Updating downloader engine..."); Thread { updateEngine(true) }.start() }
@@ -543,17 +552,25 @@ jobs:
            }
 
            private fun applyWeb(w: WebView) { val s = w.settings; s.javaScriptEnabled = true; s.domStorageEnabled = true; s.mediaPlaybackRequiresUserGesture = false; s.userAgentString = if (desktop) DESKTOP_UA else null; s.useWideViewPort = false; s.loadWithOverviewMode = false; s.setSupportZoom(true); s.builtInZoomControls = true; s.displayZoomControls = false; s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE; if (Build.VERSION.SDK_INT >= 33) s.isAlgorithmicDarkeningAllowed = dark else s.forceDark = if (dark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF }
+           private fun debugInfo() {
+            val t = tabs.getOrNull(cur); if (t == null || t.home) { toast("Open a page first, then tap Version"); return }
+            val w = t.web
+            w.evaluateJavascript("(function(){var e=document.scrollingElement||document.documentElement;var m=document.querySelector('meta[name=viewport]');return JSON.stringify({innerW:window.innerWidth,innerH:window.innerHeight,dpr:window.devicePixelRatio,scrollH:e.scrollHeight,scrollW:e.scrollWidth,scrollY:window.scrollY,meta:m?m.content:''});})();") { raw ->
+             val msg = try { (JSONTokener(raw).nextValue() as? String) ?: raw } catch (e: Exception) { raw ?: "" }
+             dlg().setTitle("Page info").setMessage("view " + w.width + "x" + w.height + "  scale " + w.scaleX + "\n" + msg).setPositiveButton("OK", null).show()
+            }
+           }
            private fun layoutWeb(w: WebView) {
             val cw = content.width; val ch = content.height; if (cw <= 0 || ch <= 0) return
             val dw = dp(1024)
-            if (desktop && cw < dw) { val sc = cw.toFloat() / dw; w.layoutParams = FrameLayout.LayoutParams(dw, (ch / sc).toInt()); w.pivotX = 0f; w.pivotY = 0f; w.scaleX = sc; w.scaleY = sc }
-            else { w.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT); w.scaleX = 1f; w.scaleY = 1f }
+            if (desktop && cw < dw) { val sc = cw.toFloat() / dw; w.layoutParams = FrameLayout.LayoutParams(dw, (ch / sc).toInt()); w.pivotX = 0f; w.pivotY = 0f; w.scaleX = sc; w.scaleY = sc; (w as? DeskWebView)?.fullVisible = true }
+            else { w.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT); w.scaleX = 1f; w.scaleY = 1f; (w as? DeskWebView)?.fullVisible = false }
            }
            private fun toggleDesktop() { desktop = !desktop; prefs.edit().putBoolean("desktop", desktop).apply(); for (t in tabs) { applyWeb(t.web); layoutWeb(t.web) }; if (!tabs[cur].home) tabs[cur].web.reload(); updateSettingsUi(); toast(if (desktop) "Desktop mode ON" else "Desktop mode OFF") }
 
            @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
            private fun newTab(profile: String? = null) {
-            val w = WebView(this); var pname = profile ?: (if (multiProfile) "t" + System.currentTimeMillis() + tabs.size else "")
+            val w = DeskWebView(this); var pname = profile ?: (if (multiProfile) "t" + System.currentTimeMillis() + tabs.size else "")
             if (pname.isNotEmpty()) { if (multiProfile) try { WebViewCompat.setProfile(w, pname) } catch (e: Exception) { pname = "" } else pname = "" }
             val pf = pname; applyWeb(w); w.addJavascriptInterface(JsBridge(pf), "ABH"); try { if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) WebViewCompat.addDocumentStartJavaScript(w, DESK_JS, setOf("*")) } catch (e: Throwable) { }; var touchLastY = 0f; var scrollAcc = 0f
             w.setOnTouchListener { _, ev ->
