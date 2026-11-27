@@ -88,7 +88,7 @@ jobs:
           plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
           android {
             namespace = "com.example.ytdl"; compileSdk = 34
-            defaultConfig { applicationId = "com.abh.browser"; minSdk = 29; targetSdk = 34; versionCode = (project.findProperty("vCode") as String?)?.toIntOrNull() ?: 1; versionName = "3.0"; ndk { abiFilters += listOf("arm64-v8a") } }
+            defaultConfig { applicationId = "com.abh.browser"; minSdk = 29; targetSdk = 34; versionCode = (project.findProperty("vCode") as String?)?.toIntOrNull() ?: 1; versionName = "3.1"; ndk { abiFilters += listOf("arm64-v8a") } }
             signingConfigs { create("abh") { storeFile = rootProject.file("abh.keystore"); storePassword = "abhbrowser"; keyAlias = "abh"; keyPassword = "abhbrowser" } }
             buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("abh") } }
             compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -107,6 +107,11 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+            <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+            <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+            <uses-permission android:name="android.permission.WAKE_LOCK" />
+            <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
             <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
             <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
             <application android:allowBackup="true" android:largeHeap="true" android:requestLegacyExternalStorage="true" android:usesCleartextTraffic="true" android:label="abh browser" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/AppTheme">
@@ -114,6 +119,7 @@ jobs:
                 <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
                 <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /></intent-filter>
               </activity>
+            <service android:name="com.example.ytdl.DlService" android:exported="false" android:foregroundServiceType="dataSync" />
             </application>
           </manifest>
           EOF_FILE
@@ -228,8 +234,10 @@ jobs:
                 <LinearLayout android:id="@+id/rowOrientation" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Screen orientation" android:textSize="17sp"/><TextView android:id="@+id/orientVal" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="Auto" android:textSize="13sp"/></LinearLayout>
                 <LinearLayout android:id="@+id/rowDesktop" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Desktop mode" android:textSize="17sp"/><TextView android:id="@+id/desktopVal" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="OFF" android:textSize="13sp"/></LinearLayout>
                 <LinearLayout android:id="@+id/rowCookies" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Use YouTube login cookies" android:textSize="17sp"/><TextView android:id="@+id/cookiesVal" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="OFF" android:textSize="13sp"/></LinearLayout>
+                <LinearLayout android:id="@+id/rowMaxDl" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Simultaneous downloads" android:textSize="17sp"/><TextView android:id="@+id/maxDlVal" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="3" android:textSize="13sp"/></LinearLayout>
+                <LinearLayout android:id="@+id/rowBattery" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Keep downloading in background" android:textSize="17sp"/><TextView android:id="@+id/batteryVal" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="" android:textSize="13sp"/></LinearLayout>
                 <LinearLayout android:id="@+id/rowUpdate" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Update downloader engine" android:textSize="17sp"/><TextView android:id="@+id/v2" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="Run this if downloads fail" android:textSize="13sp"/></LinearLayout>
-                <LinearLayout android:id="@+id/rowAbout" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="abh browser" android:textSize="17sp"/><TextView android:id="@+id/v3" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="Version 3.0" android:textSize="13sp"/></LinearLayout>
+                <LinearLayout android:id="@+id/rowAbout" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:clickable="true" android:focusable="true" android:background="?android:attr/selectableItemBackground"><TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="abh browser" android:textSize="17sp"/><TextView android:id="@+id/v3" android:tag="sec" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="Version 3.1" android:textSize="13sp"/></LinearLayout>
               </LinearLayout></ScrollView>
             </LinearLayout>
             <LinearLayout android:id="@+id/tabsPage" android:tag="bg" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:clickable="true" android:visibility="gone">
@@ -358,6 +366,25 @@ jobs:
           val SIZE_ONLY_RE = Regex("^[0-9]+(\\.[0-9]+)?\\s*(mb|kb|gb|kbps)?$", RegexOption.IGNORE_CASE)
           val WV_FALLBACK_CODES = setOf(401, 403, 406, 409, 412, 429, 503)
 
+          lNotification(c: android.content.Context, text: String): android.app.Notification {
+           val nm = c.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+           if (nm.getNotificationChannel("dl") == null) nm.createNotificationChannel(android.app.NotificationChannel("dl", "Downloads", android.app.NotificationManager.IMPORTANCE_LOW))
+           val pi = android.app.PendingIntent.getActivity(c, 0, Intent(c, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP), android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+           return android.app.Notification.Builder(c, "dl").setContentTitle("abh browser").setContentText(text).setSmallIcon(R.drawable.ic_download).setContentIntent(pi).setOngoing(true).setOnlyAlertOnce(true).build()
+          }
+          class DlService : android.app.Service() {
+           private var wl: android.os.PowerManager.WakeLock? = null
+           override fun onBind(intent: Intent?): android.os.IBinder? = null
+           override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+            val text = intent?.getStringExtra("t") ?: "Downloading..."
+            val n = buildDlNotification(this, text)
+            if (Build.VERSION.SDK_INT >= 29) startForeground(7001, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else startForeground(7001, n)
+            if (wl == null) { try { wl = (getSystemService(POWER_SERVICE) as android.os.PowerManager).newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "abh:dl"); wl?.acquire(6 * 60 * 60 * 1000L) } catch (e: Exception) { } }
+            return START_NOT_STICKY
+           }
+           override fun onDestroy() { try { wl?.release() } catch (e: Exception) { }; wl = null; super.onDestroy() }
+          }
+          
           class MainActivity : Activity() {
            private val tabs = mutableListOf<Tab>(); private val items = mutableListOf<DlItem>(); private var shownCache: List<DlItem> = emptyList()
            private var cur = 0; private var dlTab = 0; @Volatile private var qPid = ""; private var ready = false
@@ -374,7 +401,7 @@ jobs:
            @Volatile private var wvLatch: CountDownLatch? = null; @Volatile private var wvCompleted = false; @Volatile private var wvErr: String? = null
            @Volatile private var wvDoneBytes = 0L; private val wvLastAct = AtomicLong(0L); private val wvFinished = AtomicBoolean(true)
            private var customView: View? = null; private var customCb: WebChromeClient.CustomViewCallback? = null; private var fileCb: ValueCallback<Array<Uri>>? = null
-           private val exec = Executors.newFixedThreadPool(3); private val directExec = Executors.newFixedThreadPool(4); private val saveExec = Executors.newSingleThreadExecutor()
+           private val exec = java.util.concurrent.ThreadPoolExecutor(3, 3, 30L, TimeUnit.SECONDS, java.util.concurrent.LinkedBlockingQueue<Runnable>()); private val directExec = exec; private val saveExec = Executors.newSingleThreadExecutor()
            private val mainHandler = Handler(Looper.getMainLooper()); private val prefs by lazy { getSharedPreferences("s", MODE_PRIVATE) }
            private lateinit var topBar: View; private lateinit var bottomBar: View; private lateinit var urlBox: EditText; private lateinit var homeSearch: EditText
            private lateinit var content: FrameLayout; private lateinit var home: View; private lateinit var tabCount: TextView; private lateinit var fab: View
@@ -411,15 +438,17 @@ jobs:
             click(R.id.rowTheme) { dlg().setTitle("Theme").setSingleChoiceItems(arrayOf("Auto (follow system)", "Light (day)", "Dark (night)"), theme) { d, i -> theme = i; prefs.edit().putInt("theme", i).apply(); d.dismiss(); applyTheme() }.show() }
             click(R.id.rowOrientation) { dlg().setTitle("Screen orientation").setSingleChoiceItems(arrayOf("Auto (follow phone)", "Landscape", "Portrait"), orient) { d, i -> orient = i; prefs.edit().putInt("orient", i).apply(); d.dismiss(); applyOrientation() }.show() }
             click(R.id.rowDesktop) { toggleDesktop() }; click(R.id.rowCookies) { cookiesOn = !cookiesOn; prefs.edit().putBoolean("cookies", cookiesOn).apply(); updateSettingsUi() }
+            click(R.id.rowMaxDl) { val c0 = prefs.getInt("maxdl", 3).coerceIn(1, 10); dlg().setTitle("Simultaneous downloads").setSingleChoiceItems(Array(10) { (it + 1).toString() }, c0 - 1) { d, i -> prefs.edit().putInt("maxdl", i + 1).apply(); applyMaxDl(); d.dismiss(); updateSettingsUi(); toast("${i + 1} downloads at a time") }.show() }
+            click(R.id.rowBattery) { try { val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager; if (pm.isIgnoringBatteryOptimizations(packageName)) toast("Already allowed") else startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) } catch (e: Exception) { try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (e2: Exception) { toast("Open phone Settings > Battery") } } }
             click(R.id.rowUpdate) { toast("Updating downloader engine..."); Thread { updateEngine(true) }.start() }
-            setupFab(); restoreTabs(); cleanupProfiles()
+            setupFab(); restoreTabs(); cleanupProfiles(); applyMaxDl(); askNotifPerm(); mainHandler.postDelayed(ticker, 1500); content.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob -> if (r - l != orr - ol || b - t != ob - ot) for (tb in tabs) layoutWeb(tb.web) }
             if (!multiProfile && !prefs.getBoolean("mpWarned", false)) { prefs.edit().putBoolean("mpWarned", true).apply(); toast("Update Android System WebView for per-tab logins.") }
             applyOrientation(); applyTheme()
             if (intent?.action == Intent.ACTION_SEND) { val txt = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""; open(Regex("https?://\\S+").find(txt)?.value ?: txt) }
             Thread { try { YoutubeDL.getInstance().init(application); FFmpeg.getInstance().init(application); ready = true } catch (e: Exception) { runOnUiThread { toast("Init failed: ${e.message}") } }; if (ready) updateEngine(false) }.start()
            }
 
-           override fun onDestroy() { activeBatchCancel?.set(true); try { dlWv?.destroy() } catch (e: Exception) { }; dlWv = null; super.onDestroy() }
+           override fun onDestroy() { activeBatchCancel?.set(true); try { dlWv?.destroy() } catch (e: Exception) { }; dlWv = null; if (items.none { it.state == 0 || it.state == 1 } && scanCount.get() == 0) { mainHandler.removeCallbacks(ticker); try { stopService(Intent(this, DlService::class.java)) } catch (e: Exception) { } }; super.onDestroy() }
            private fun click(id: Int, f: (View) -> Unit) { findViewById<View>(id).setOnClickListener { f(it) } }
            private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
            private fun dp(x: Int) = (x * resources.displayMetrics.density).toInt()
@@ -465,6 +494,8 @@ jobs:
            private fun updateSettingsUi() {
             val folder = prefs.getString("folder", "") ?: ""
             findViewById<TextView>(R.id.folderVal).text = if (folder.isEmpty()) "Downloads (default)" else (Uri.parse(folder).lastPathSegment ?: folder)
+            findViewById<TextView>(R.id.maxDlVal).text = "${prefs.getInt("maxdl", 3).coerceIn(1, 10)} at a time (choose 1 to 10)"
+            findViewById<TextView>(R.id.batteryVal).text = try { if ((getSystemService(POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(packageName)) "Allowed (best)" else "Tap to allow - needed so downloads continue when app is closed" } catch (e: Exception) { "" }
             findViewById<TextView>(R.id.themeVal).text = when (theme) { 1 -> "Light (day)"; 2 -> "Dark (night)"; else -> "Auto (follow system)" }
             findViewById<TextView>(R.id.orientVal).text = when (orient) { 1 -> "Landscape"; 2 -> "Portrait"; else -> "Auto (follow phone)" }
             findViewById<TextView>(R.id.desktopVal).text = if (desktop) "ON" else "OFF"; findViewById<TextView>(R.id.cookiesVal).text = if (cookiesOn) "ON" else "OFF - turn ON if you see sign in / not a bot errors"
@@ -510,8 +541,14 @@ jobs:
             w.evaluateJavascript(js, null)
            }
 
-           private fun applyWeb(w: WebView) { val s = w.settings; s.javaScriptEnabled = true; s.domStorageEnabled = true; s.mediaPlaybackRequiresUserGesture = false; s.userAgentString = if (desktop) DESKTOP_UA else null; s.useWideViewPort = desktop; s.loadWithOverviewMode = desktop; s.setSupportZoom(true); s.builtInZoomControls = true; s.displayZoomControls = false; s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE; if (Build.VERSION.SDK_INT >= 33) s.isAlgorithmicDarkeningAllowed = dark else s.forceDark = if (dark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF }
-           private fun toggleDesktop() { desktop = !desktop; prefs.edit().putBoolean("desktop", desktop).apply(); for (t in tabs) applyWeb(t.web); if (!tabs[cur].home) tabs[cur].web.reload(); updateSettingsUi(); toast(if (desktop) "Desktop mode ON" else "Desktop mode OFF") }
+           private fun applyWeb(w: WebView) { val s = w.settings; s.javaScriptEnabled = true; s.domStorageEnabled = true; s.mediaPlaybackRequiresUserGesture = false; s.userAgentString = if (desktop) DESKTOP_UA else null; s.useWideViewPort = false; s.loadWithOverviewMode = false; s.setSupportZoom(true); s.builtInZoomControls = true; s.displayZoomControls = false; s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE; if (Build.VERSION.SDK_INT >= 33) s.isAlgorithmicDarkeningAllowed = dark else s.forceDark = if (dark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF }
+           private fun layoutWeb(w: WebView) {
+            val cw = content.width; val ch = content.height; if (cw <= 0 || ch <= 0) return
+            val dw = dp(1024)
+            if (desktop && cw < dw) { val sc = cw.toFloat() / dw; w.layoutParams = FrameLayout.LayoutParams(dw, (ch / sc).toInt()); w.pivotX = 0f; w.pivotY = 0f; w.scaleX = sc; w.scaleY = sc }
+            else { w.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT); w.scaleX = 1f; w.scaleY = 1f }
+           }
+           private fun toggleDesktop() { desktop = !desktop; prefs.edit().putBoolean("desktop", desktop).apply(); for (t in tabs) { applyWeb(t.web); layoutWeb(t.web) }; if (!tabs[cur].home) tabs[cur].web.reload(); updateSettingsUi(); toast(if (desktop) "Desktop mode ON" else "Desktop mode OFF") }
 
            @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
            private fun newTab(profile: String? = null) {
@@ -579,7 +616,7 @@ jobs:
            private fun forceDesktopViewport(w: WebView?) { if (!desktop || w == null) return; w.evaluateJavascript("(function(){function fix(){var ms=document.querySelectorAll('meta[name=viewport]');var m=ms[0];if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');(document.head||document.documentElement).appendChild(m);}for(var i=1;i<ms.length;i++){ms[i].parentNode.removeChild(ms[i]);}if(m.getAttribute('content')!=='width=1024')m.setAttribute('content','width=1024');}fix();if(!window.__abhDesk){window.__abhDesk=1;new MutationObserver(fix).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['content','name']});}})();", null) }
            private fun hideCustom() { val v = customView ?: return; (window.decorView as FrameLayout).removeView(v); customCb?.onCustomViewHidden(); customView = null; customCb = null; bars() }
            private fun captureThumb(t: Tab) { if (t.home) return; val v = t.web; if (v.width <= 0 || v.height <= 0) return; try { val tw = 360; val sc = tw.toFloat() / v.width.toFloat(); val bmp = Bitmap.createBitmap(tw, (v.height * sc).toInt().coerceIn(120, 640), Bitmap.Config.RGB_565); val c = Canvas(bmp); c.scale(sc, sc); v.draw(c); t.thumb = bmp } catch (e: Exception) { } }
-           private fun showTab(i: Int) { if (cur != i && cur in tabs.indices) captureThumb(tabs[cur]); cur = i; for (j in content.childCount - 1 downTo 0) if (content.getChildAt(j) is WebView) content.removeViewAt(j); content.addView(tabs[i].web, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)); refresh() }
+           private fun showTab(i: Int) { if (cur != i && cur in tabs.indices) captureThumb(tabs[cur]); cur = i; for (j in content.childCount - 1 downTo 0) if (content.getChildAt(j) is WebView) content.removeViewAt(j); content.addView(tabs[i].web, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)); layoutWeb(tabs[i].web); refresh() }
            private fun refresh() { val t = tabs[cur]; home.visibility = if (t.home) View.VISIBLE else View.GONE; urlBox.setText(if (t.home) "" else (t.web.url ?: "")); tabCount.text = tabs.size.toString(); val pr = t.web.progress; pageBar.progress = pr; pageBar.visibility = if (!t.home && pr in 1..99) View.VISIBLE else View.GONE; setBarsHidden(false); updateFab() }
            private fun open(raw: String) { val s = raw.trim(); if (s.isEmpty()) return; val url = when { s.startsWith("http://") || s.startsWith("https://") -> s; !s.contains(" ") && s.contains(".") -> "https://$s"; else -> "https://www.google.com/search?q=" + Uri.encode(s) }; val t = tabs[cur]; t.home = false; t.web.loadUrl(url); refresh(); urlBox.setText(url) }
            private fun showTabs() { if (tabs.getOrNull(cur) != null) captureThumb(tabs[cur]); tabsGrid.numColumns = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) 3 else 2; findViewById<TextView>(R.id.tabsTitle).text = "Tabs (${tabs.size})"; tabsAdapter.notifyDataSetChanged(); showPage(tabsPage) }
@@ -767,9 +804,9 @@ jobs:
             val cleanRoot = sanitizeFolder(rootFolder); val totalPicked = selectedFolders.size + (if (preloadedSubs.isNotEmpty()) 1 else 0)
             toast(if (totalPicked > 0) "Scanning $totalPicked folder(s) & starting downloads..." else "Starting ${rootAudios.size} song download(s)...")
             dlTab = 0; flyToDownload(); if (rootAudios.isNotEmpty()) enqueueAudioList(rootAudios, cleanRoot, rootUrl, ua, profile, false)
-            if (selectedFolders.isEmpty() && preloadedSubs.isEmpty()) return; activeBatchCancel?.set(true); val batchCancelled = AtomicBoolean(false); activeBatchCancel = batchCancelled
+            if (selectedFolders.isEmpty() && preloadedSubs.isEmpty()) return; activeBatchCancel?.set(true); val batchCancelled = AtomicBoolean(false); activeBatchCancel = batchCancelled; scanCount.incrementAndGet(); tickService()
             Thread {
-             var queuedSongs = rootAudios.size; var scannedCount = 0; val visited = HashSet<String>(templateLinks); visited.addAll(skippedUrls); visited.add(normUrl(rootUrl))
+             try { var queuedSongs = rootAudios.size; var scannedCount = 0; val visited = HashSet<String>(templateLinks); visited.addAll(skippedUrls); visited.add(normUrl(rootUrl))
              val seenSongKeys = HashSet<String>(); val rootSlash = cleanRoot.count { it == '/' }; val queue = ArrayDeque<Triple<FoundLink, String, String>>()
              for (sf in preloadedSubs) queue.addLast(Triple(sf, sanitizeFolder("$cleanRoot/$preloadedPrefix/${sf.name}"), rootUrl))
              for (sf in selectedFolders) queue.addLast(Triple(sf, sanitizeFolder("$cleanRoot/${sf.name}"), rootUrl))
@@ -785,7 +822,7 @@ jobs:
                }
               } catch (e: Exception) { }
              }
-             if (!batchCancelled.get()) runOnUiThread { toast("Queued $queuedSongs songs in $cleanRoot") }
+             if (!batchCancelled.get()) runOnUiThread { toast("Queued $queuedSongs songs in $cleanRoot") } } finally { scanCount.decrementAndGet() }
             }.start()
            }
 
@@ -798,7 +835,7 @@ jobs:
              if (!usedNames.add(cleanTitle.lowercase(Locale.US))) { val fromUrl = guessNameFromUrl(a.url); if (!isJunkTitle(fromUrl) && usedNames.add(fromUrl.lowercase(Locale.US))) cleanTitle = fromUrl else { var n = 2; while (!usedNames.add("$cleanTitle ($n)".lowercase(Locale.US))) n++; cleanTitle = "$cleanTitle ($n)" } }
              val d = DlItem(cleanTitle, 0, 0, null, null, ""); d.kind = 1; d.link = a.url; d.page = pageUrl; d.profile = profile; d.ua = ua; d.name = cleanTitle + ext; d.folder = cleanFolder; d.customName = true; d.expectAudio = true; items.add(0, d); toRun.add(d)
             }
-            dlTab = 0; if (animate) { flyToDownload(); toast("Added ${audios.size} songs to Downloads") }; scheduleSaveItems(); if (dlPage.visibility == View.VISIBLE) refreshDl()
+            dlTab = 0; if (animate) { flyToDownload(); toast("Added ${audios.size} songs to Downloads") }; scheduleSaveItems(); if (dlPage.visibility == View.VISIBLE) refreshDl(); tickService()
             for (d in toRun) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; directExec.execute { runDirect(d, g) } }
            }
 
@@ -1020,6 +1057,21 @@ jobs:
             }.start()
            }
 
+            scanCount = java.util.concurrent.atomic.AtomicInteger(0); private var svcOn = false; private var lastNotifText = ""
+           private val ticker = object : Runnable { override fun run() { try { tickService() } catch (e: Exception) { }; mainHandler.postDelayed(this, 1500) } }
+           private fun applyMaxDl() { val n = prefs.getInt("maxdl", 3).coerceIn(1, 10); try { if (n > exec.maximumPoolSize) { exec.maximumPoolSize = n; exec.corePoolSize = n } else { exec.corePoolSize = n; exec.maximumPoolSize = n } } catch (e: Exception) { } }
+           private fun askNotifPerm() { if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) try { requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 82) } catch (e: Exception) { } }
+           private fun tickService() {
+            val act = items.filter { it.state == 0 || it.state == 1 }; val busy = act.isNotEmpty() || scanCount.get() > 0
+            if (busy) {
+             val run = act.filter { it.state == 1 }; val first = run.firstOrNull()
+             val text = if (act.isEmpty()) "Scanning folders..." else "${run.size} downloading, ${act.size - run.size} waiting" + (if (first != null) " - ${first.title.take(30)} ${first.progress}%" else "")
+             if (!svcOn) { svcOn = try { startForegroundService(Intent(this, DlService::class.java).putExtra("t", text)); true } catch (e: Exception) { false } }
+             else if (text != lastNotifText) try { (getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager).notify(7001, buildDlNotification(this, text)) } catch (e: Exception) { }
+             lastNotifText = text
+            } else if (svcOn) { try { stopService(Intent(this, DlService::class.java)) } catch (e: Exception) { }; svcOn = false; lastNotifText = "" }
+           }
+           override fun onResume() { super.onResume(); updateSettingsUi() }
            override fun onStop() { super.onStop(); if (tabs.getOrNull(cur) != null) captureThumb(tabs[cur]); saveTabs(); saveItemsAsync() }
 
            private fun saveTabs() {
@@ -1102,7 +1154,7 @@ jobs:
             pm.show()
            }
 
-           private fun retryAllFailed() { val toRun = items.filter { it.state == 3 || it.state == 4 }.reversed(); if (toRun.isEmpty()) return; for (d in toRun) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; if (d.kind == 0) { val ck = cookieText(d.link, d.profile); exec.execute { runDownload(d, ck, g) } } else directExec.execute { runDirect(d, g) } }; refreshDl(); toast("Starting ${toRun.size} downloads") }
+           private fun retryAllFailed() { val toRun = items.filter { it.state == 3 || it.state == 4 }.reversed(); if (toRun.isEmpty()) return; for (d in toRun) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; if (d.kind == 0) { val ck = cookieText(d.link, d.profile); exec.execute { runDownload(d, ck, g) } } else directExec.execute { runDirect(d, g) } }; refreshDl(); tickService(); toast("Starting ${toRun.size} downloads") }
            private fun clearDownloadsTab() { if (dlTab == 0) { val active = items.filter { it.state != 2 }; if (active.isEmpty()) return; dlg().setTitle("Clear downloading list?").setMessage("Remove all ${active.size} active/failed items?").setPositiveButton("Clear") { _, _ -> activeBatchCancel?.set(true); for (d in active) { d.stop = 2; d.gen++; if (d.kind == 0) try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }; File(filesDir, "parts/" + d.id).deleteRecursively() }; items.removeAll { it.state != 2 }; saveItemsAsync(); refreshDl(); toast("Cleared") }.setNegativeButton("Cancel", null).show() } else { val done = items.filter { it.state == 2 }; if (done.isEmpty()) return; dlg().setTitle("Clear history?").setMessage("Remove ${done.size} items from this list? (Files on your phone will stay)").setPositiveButton("Clear") { _, _ -> items.removeAll { it.state == 2 }; saveItemsAsync(); refreshDl(); toast("Cleared") }.setNegativeButton("Cancel", null).show() } }
            private fun fmtSize(b: Long) = when { b >= 1073741824L -> String.format(Locale.US, "%.2f GB", b / 1073741824.0); b >= 1048576L -> String.format(Locale.US, "%.1f MB", b / 1048576.0); b >= 1024L -> String.format(Locale.US, "%.0f KB", b / 1024.0); else -> "$b B" }
            private val ytRe = Regex("(?:[?&]v=|youtu\\.be/|/shorts/|/embed/|/live/)([A-Za-z0-9_-]{11})")
@@ -1188,7 +1240,7 @@ jobs:
            }
 
            private fun enqueue(link: String, page: String, title: String, q: Q) { val d = DlItem(title, 0, 0, null, null, ""); d.kind = 0; d.link = link; d.page = page; d.audio = q.audio; d.fmt = q.fmt; d.total = q.bytes; d.vid = vidOf(link); d.qkey = q.key; d.qtag = q.tag; d.profile = tabs.getOrNull(cur)?.profile ?: ""; items.add(0, d); dlTab = 0; flyToDownload(); toast("Added to Downloads"); startRun(d) }
-           private fun startRun(d: DlItem) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; if (dlPage.visibility == View.VISIBLE) refreshDl(); if (d.kind == 0) { val ck = cookieText(d.link, d.profile); exec.execute { runDownload(d, ck, g) } } else directExec.execute { runDirect(d, g) } }
+           private fun startRun(d: DlItem) { d.stop = 0; d.state = 0; d.gen++; val g = d.gen; if (dlPage.visibility == View.VISIBLE) refreshDl(); tickService(); if (d.kind == 0) { val ck = cookieText(d.link, d.profile); exec.execute { runDownload(d, ck, g) } } else directExec.execute { runDirect(d, g) } }
            private fun pauseItem(d: DlItem) { d.stop = 1; if (d.kind == 0) try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }; d.state = 4; scheduleSaveItems(); refreshDl() }
            private fun askDelete(d: DlItem) { dlg().setTitle("Delete?").setMessage(if (d.state == 2) "This will delete the file from your phone." else "This will cancel the download and remove it.").setPositiveButton("Delete") { _, _ -> deleteItem(d) }.setNegativeButton("Cancel", null).show() }
            private fun deleteItem(d: DlItem) { d.stop = 2; d.gen++; if (d.kind == 0) try { YoutubeDL.getInstance().destroyProcessById(d.id) } catch (e: Exception) { }; val us = d.uri; if (!us.isNullOrEmpty()) try { val u = Uri.parse(us); if (DocumentsContract.isDocumentUri(this, u)) DocumentsContract.deleteDocument(contentResolver, u) else contentResolver.delete(u, null, null) } catch (e: Exception) { }; File(filesDir, "parts/" + d.id).deleteRecursively(); items.remove(d); scheduleSaveItems(); refreshDl(); toast("Deleted") }
